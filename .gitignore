@@ -1,0 +1,77 @@
+# --- Python Basics ---
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / Packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --- Virtual Environments ---
+# It is safer to list common names, even if you use .venv
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Jupyter Notebooks ---
+# Checkpoints created by Jupyter (Autosave backups)
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# Optional: If you are using Jupytext and ONLY want to track the .py files
+# Uncomment the line below to ignore all .ipynb files
+# *.ipynb
+
+# --- Data Science & Large Files ---
+# Ignore all data folders to prevent 5GB CSVs from hitting GitHub
+data/
+datasets/
+outputs/
+models/
+results/
+
+# specific file extensions that are usually data
+*.csv
+*.tsv
+*.dat
+*.hdf5
+*.h5
+*.pkl
+*.pickle
+*.parquet
+*.feather
+*.db
+*.sqlite
+
+# --- IDE & Editors ---
+.vscode/
+.idea/
+.DS_Store
+
+# --- Testing & Type Checking ---
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Docker ---
+# If you mount data, you don't want to track the mounted location if it differs
+docker-compose.override.yml

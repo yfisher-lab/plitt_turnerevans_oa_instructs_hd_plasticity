@@ -19,6 +19,8 @@ dependencies = [
     "navis",
     "neuprint-python",
     "papermill",
+    "nbdime",
+    "sessiontools @ git+https://github.com/yfisher-lab/SessionTools.git",
 ]
 
 [project.optional-dependencies]
@@ -27,3 +29,6 @@ dev = [
     "black",
     "flake8",
 ]
+
+[tools.setuptools.packages.find]
+where = ["src"]
