@@ -1,11 +1,33 @@
+"""Session timeseries extraction and analysis for two-photon imaging data.
+
+Provides classes for extracting neural timeseries, computing circular statistics
+(heading, offset, population vector), and aligning activity to behavior.
+"""
 
 import numpy as np
 import scipy as sp
 
-
 import SessionTools.two_photon as st2p
 
 class GetTS_DTE():
+    """Extract and compute timeseries statistics from Dan Turner-Evans behavioral/neural data.
+    
+    Computes dF/F for multi-channel data, calculates circular statistics (heading offset,
+    population vector), and aligns neural activity to heading for each trial epoch.
+    
+    Attributes:
+        trial_dict: Dict with behavioral data and neural timeseries by channel.
+        channel_mapping: Dict mapping channel names (e.g., 'EPG', 'EL') to trial_dict keys.
+        dff: Neural timeseries; shape (n_channels, n_rois, n_timepoints).
+        heading: Animal heading in radians.
+        heading_sm: Smoothed heading.
+        offset: Heading offset (phi - heading) per channel; shape (n_channels, n_timepoints).
+        phi: Population vector angle per channel.
+        rho: Population vector magnitude per channel.
+        dff_h_aligned: Neural activity aligned to heading bins.
+        offset_c: Complex representation of offset (exp(1j*offset)).
+        fwhm: Full-width at half-max of population tuning per channel.
+    """
 
     def __init__(self, trial_dict, channel_mapping, **kwargs):
         self.trial_dict = trial_dict
@@ -29,7 +51,16 @@ class GetTS_DTE():
         self.calc_fwhm()
 
     def get_ts(self, circ_sigma=.5, t_sigma=.1, h_sigma=.1, neural_shift=-.2, dh_sigma=0, closed=True):
-
+        """Extract and compute timeseries and circular statistics.
+        
+        Args:
+            circ_sigma: Gaussian smoothing width (in ROI bins) across neural population.
+            t_sigma: Gaussian smoothing width (in seconds) along time axis.
+            h_sigma: Gaussian smoothing width (in seconds) for heading.
+            neural_shift: Time offset (in seconds) to align neural to behavior (typically negative).
+            dh_sigma: Gaussian smoothing width for heading derivative.
+            closed: If True, only use closed-loop behavior; else use all data.
+        """
         behav_data = self.trial_dict['behavDat']
         mask = behav_data['closed']==1
 
@@ -73,9 +104,19 @@ class GetTS_DTE():
 
     @property
     def offset_c(self):
+        """Complex representation of heading offset as unit vectors.
+        
+        Returns:
+            ndarray of dtype complex with magnitude 1 and angle equal to self.offset.
+        """
         return np.exp(1j*self.offset)
     
     def heading_aligned(self):
+        """Align neural activity to heading bins by rolling each timepoint 
+        
+        Creates dff_h_aligned where each heading is rotated to a fixed reference, enabling
+        averaging of activity at each heading.
+        """
         self.heading_bins = np.linspace(-np.pi, np.pi, num=self.n_rois+1)
         heading_dig = np.digitize(self.heading, self.heading_bins)-1
 
@@ -89,7 +130,11 @@ class GetTS_DTE():
                     self.dff_h_aligned[chan,:,ind] = np.roll(self.dff[chan,:,ind], -heading_dig[ind]+8)
 
     def calc_fwhm(self):
+        """Compute full-width at half-max (FWHM) of population heading tuning.
         
+        For each channel, aligns activity to peak response and computes the angular width
+        where normalized response >= 0.5.
+        """
         def _fwhm(dff):
             max_inds = np.argmax(dff, axis=0)
             dff_aligned = np.zeros_like(dff)
@@ -106,9 +151,33 @@ class GetTS_DTE():
 
 
 class GetTS():
+    """Extract and compute timeseries statistics from preprocessed imaging session.
+    
+    Computes dF/F for neural ROIs, calculates circular statistics (heading offset,
+    population vector),  and aligns neural activity to heading.
+    
+    Attributes:
+        pp: Preprocessed session object with voltage recordings and calcium imaging data.
+        dff: Z-scored dF/F timeseries; shape (n_rois, n_timepoints) or (n_channels, n_rois, n_timepoints).
+        heading: Animal heading in radians.
+        heading_sm: Smoothed heading.
+        offset: Heading offset (phi - heading).
+        phi: Population vector angle.
+        rho: Population vector magnitude.
+        dff_h_aligned: Neural activity aligned to heading bins.
+        offset_c: Complex representation of offset (exp(1j*offset)).
+        outer_ring: Activity from EB outer ring region.
+        fwhm: Full-width at half-max of population tuning.
+        dh: Time derivative of heading.
+    """
     
     def __init__(self, pp, **kwargs):
+        """Initialize session and compute timeseries and statistics.
         
+        Args:
+            pp: Preprocessed session object.
+            **kwargs: Passed to get_ts() method.
+        """
         self.pp = pp
         self.dff = None
         self.heading = None
@@ -127,7 +196,6 @@ class GetTS():
 
         self.outer_ring = None
 
-        
         self.get_ts(**kwargs)
         self.heading_aligned()
         self.calc_fwhm()
@@ -136,10 +204,19 @@ class GetTS():
         
     def get_ts(self, channels=-1, exp_detrend=True, zscore=True, background_ts='background',
                circ_sigma=.5, t_sigma=.1, h_sigma=.1, neural_shift=-.2, dh_sigma=0):
+        """Extract and compute timeseries and circular statistics from preprocessed session.
         
-        
-        
-        
+        Args:
+            channels: ROI channels to extract; -1 uses all ROIs (default).
+            exp_detrend: If True, exponential detrending is applied to dF/F.
+            zscore: If True, z-score dF/F across time.
+            background_ts: Background timeseries to use for dF computation.
+            circ_sigma: Gaussian smoothing width (in ROI bins) across neural population.
+            t_sigma: Gaussian smoothing width (in seconds) along time axis.
+            h_sigma: Gaussian smoothing width (in seconds) for heading.
+            neural_shift: Time offset (in seconds) to align neural to behavior (typically negative).
+            dh_sigma: Gaussian smoothing width for heading derivative.
+        """
         self.time = self.pp.voltage_recording_aligned['Time(ms)']/1000
         self.time = self.time-self.time[0]
         
@@ -198,6 +275,11 @@ class GetTS():
         
         
     def heading_aligned(self):
+        """Align neural activity to heading bins by rolling each timepoint to a canonical position.
+        
+        Creates dff_h_aligned where each heading is rotated to a fixed reference, enabling
+        averaging of activity at each heading.
+        """
         self.heading_bins = np.linspace(-np.pi, np.pi, num=self.n_rois+1)
         heading_dig = np.digitize(self.heading, self.heading_bins)-1
 
@@ -212,10 +294,19 @@ class GetTS():
     
     @property
     def offset_c(self):
+        """Complex representation of heading offset as unit vectors.
+        
+        Returns:
+            ndarray of dtype complex with magnitude 1 and angle equal to self.offset.
+        """
         return np.exp(1j*self.offset)
     
     def calc_fwhm(self):
+        """Compute full-width at half-max (FWHM) of population heading tuning.
         
+        For each channel (if multi-channel), aligns activity to peak response and computes
+        the angular width where normalized response >= 0.5.
+        """
         def _fwhm(dff):
             max_inds = np.argmax(dff, axis=0)
             dff_aligned = np.zeros_like(dff)
@@ -229,7 +320,3 @@ class GetTS():
             self.fwhm = [_fwhm(self.dff[i,:,:]) for i in range(self.dff.shape[0])]
         else:
             self.fwhm = _fwhm(self.dff)
-            
-
-    
-    

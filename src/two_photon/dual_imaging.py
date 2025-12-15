@@ -9,7 +9,7 @@ from matplotlib.ticker import (MultipleLocator, AutoMinorLocator)
 
 
 import SessionTools.two_photon as st2p
-from . import session
+from . import session, utilities
 
 
 def offset_stats_DTE(data, channel_lookup):
@@ -23,7 +23,7 @@ def offset_stats_DTE(data, channel_lookup):
 
             mean_offsets = np.angle(ts.offset_c.mean(axis=-1))
             offset_var = sp.stats.circvar(ts.offset, axis=-1)
-            offset_diff = np.angle(np.exp(1j*(ts.offset[0,:]-ts.offset[1,:]))))
+            offset_diff = np.angle(np.exp(1j*(ts.offset[0,:]-ts.offset[1,:])))
             pva_diff = np.abs(np.angle(np.exp(1j*np.diff(ts.phi, axis=0)))).mean()
             
             rows.append({
@@ -235,11 +235,6 @@ def plot_sess_heatmaps(ts, fly_id, sess_name, vmin=-.5, vmax=.5, plot_times = np
 
     fig, ax = plt.subplots(3,2, figsize=[15,6], sharey=True, sharex=True)
 
-    def get_time_ticks_inds(time, plot_times):
-        inds = []
-        for t in plot_times:
-            inds.append(np.argmin(np.abs(time-t)))
-        return inds
     
     x = np.arange(ts.dff.shape[-1])
 
@@ -285,7 +280,7 @@ def plot_sess_heatmaps(ts, fly_id, sess_name, vmin=-.5, vmax=.5, plot_times = np
         a.set_ylabel('ROIs')
         a.set_yticks([-0.5,7.5,15.5], labels=[r'0', r'$\pi$', r'$2\pi$'])
         
-        a.set_xticks(get_time_ticks_inds(ts.time, plot_times), labels=plot_times)
+        a.set_xticks(utilities.get_time_tick_indices(ts.time, plot_times), labels=plot_times)
         a.set_xlabel('Time (s)')
 
     
@@ -389,12 +384,6 @@ def plot_transpose_heatmaps(ts, fly_id, sess_name, vmin=-.5, vmax=.5, plot_times
           fig.add_subplot(gs[2]), 
           fig.add_subplot(gs[3])]
     
-
-    def get_time_ticks_inds(time, plot_times):
-        inds = []
-        for t in plot_times:
-            inds.append(np.argmin(np.abs(time-t)))
-        return inds
     
     x = np.arange(ts.dff.shape[-1])
 
@@ -431,8 +420,8 @@ def plot_transpose_heatmaps(ts, fly_id, sess_name, vmin=-.5, vmax=.5, plot_times
     for a in ax:
         a.set_xlabel('ROIs')
         a.set_xticks([-0.5,7.5,15.5], labels=[r'0', r'$\pi$', r'$2\pi$'])
-        
-        a.set_yticks(get_time_ticks_inds(ts.time, plot_times), labels=plot_times)
+
+        a.set_yticks(utilities.get_time_tick_indices(ts.time, plot_times), labels=plot_times)
         a.set_ylabel('Time (s)')
 
         a.set_ylim([ts.dff.shape[-1]-0.5, -.5])
@@ -456,11 +445,7 @@ def plot_sess_heatmaps_w_hist(ts, fly_id, sess_name, vmin=-.5, vmax=3, plot_time
     cbar_ax = [fig.add_subplot(gs[i,3]) for i in range(2)]
 
 
-    def get_time_ticks_inds(time, plot_times):
-        inds = []
-        for t in plot_times:
-            inds.append(np.argmin(np.abs(time-t)))
-        return inds
+ 
     
     def plot_row(ch, row, cmap, title, hatch=None):
         dff = ts.dff[ch,:,:]
@@ -489,7 +474,7 @@ def plot_sess_heatmaps_w_hist(ts, fly_id, sess_name, vmin=-.5, vmax=3, plot_time
         heatmap_axs[row].yaxis.set_minor_locator(AutoMinorLocator())
         
         _plot_times = plot_times[plot_times<time.iloc[-1]]
-        heatmap_axs[row].set_xticks(get_time_ticks_inds(time, _plot_times), labels=_plot_times)
+        heatmap_axs[row].set_xticks(utilities.get_time_tick_indices(time, _plot_times), labels=_plot_times)
         heatmap_axs[row].set_xlabel('Time (s)')
         
         heatmap_axs[row].set_title(title)

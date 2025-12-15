@@ -4,18 +4,7 @@ from matplotlib import pyplot as plt
 from matplotlib.gridspec import GridSpec as GS
 from matplotlib.ticker import (MultipleLocator, AutoMinorLocator)
 
-
-def _get_time_tick_indices(time, plot_times):
-    """Find the closest indices in time array for given plot times.
-    
-    Args:
-        time: Time array (typically pandas Series).
-        plot_times: Array of time values to find indices for.
-        
-    Returns:
-        List of indices in time array closest to each plot_time.
-    """
-    return [np.argmin(np.abs(time - t)) for t in plot_times]
+from . import utilities
 
 
 def _apply_time_window(dff, heading, time, twindow=None):
@@ -77,7 +66,7 @@ def plot_transpose_heatmaps(ts_dict, vmin=-.5, vmax=.5, plot_times=np.arange(0, 
         ax[0, col].set_xticks([-0.5, 7.5, 15.5], labels=[r'0', r'$\pi$', r'$2\pi$'])
         
         _plot_times = plot_times[plot_times < time.iloc[-1]]
-        ax[0, col].set_yticks(_get_time_tick_indices(time, _plot_times), labels=_plot_times)
+        ax[0, col].set_yticks(utilities.get_time_tick_indices(time, _plot_times), labels=_plot_times)
         ax[0, col].set_ylabel('Time (s)')
         ax[0, col].set_title(key)
     
@@ -131,7 +120,7 @@ def plot_sess_heatmaps(ts_dict, vmin=-.5, vmax=.5, plot_times=np.arange(0, 360, 
         ax[row, 0].set_yticks([-0.5, 7.5, 15.5], labels=[r'0', r'$\pi$', r'$2\pi$'])
         
         _plot_times = plot_times[plot_times < time.iloc[-1]]
-        ax[row, 0].set_xticks(_get_time_tick_indices(time, _plot_times), labels=_plot_times)
+        ax[row, 0].set_xticks(utilities.get_time_tick_indices(time, _plot_times), labels=_plot_times)
         ax[row, 0].set_xlabel('Time (s)')
         ax[row, 0].set_title(key)
     
@@ -242,7 +231,7 @@ def plot_sess_heatmaps_w_hist(ts_dict, bins=np.linspace(-np.pi, np.pi, num=17), 
         heatmap_axs[row].yaxis.set_minor_locator(AutoMinorLocator())
         
         _plot_times = plot_times[plot_times < time.iloc[-1]]
-        heatmap_axs[row].set_xticks(_get_time_tick_indices(time, _plot_times), labels=_plot_times)
+        heatmap_axs[row].set_xticks(utilities.get_time_tick_indices(time, _plot_times), labels=_plot_times)
         heatmap_axs[row].set_xlabel('Time (s)')
         heatmap_axs[row].set_title(key)
 

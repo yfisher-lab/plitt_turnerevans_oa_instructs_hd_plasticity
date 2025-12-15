@@ -5,49 +5,67 @@ from matplotlib import pyplot as plt
 from matplotlib.gridspec import GridSpec as GS
 from matplotlib.ticker import (MultipleLocator, AutoMinorLocator)
 
+from .utilities import get_time_tick_indices
 
 
 def get_opto_resp(pp, zscore=False):
+    """Extract per-ROI optogenetic responses aligned to stimulus offsets.
+
+    Scans the voltage recording for opto trigger onsets, masks the immediate
+    frames around triggers, computes dF/F (z-scored) and returns the mean
+    response for a short window after each opto offset organized as
+    (n_rois, n_points, n_reps).
+
+    Args:
+        pp: Preprocessed session object with attributes `voltage_recording_aligned`,
+            `metadata`, and `timeseries` used below.
+        zscore: If True, z-score the resulting opto responses across all values.
+
+    Returns:
+        opto_resp: ndarray shaped (n_rois, n_points, n_reps) containing mean responses.
+    """
     time = pp.voltage_recording_aligned['Time(ms)']
     opto_trig = pp.voltage_recording_aligned[' Opto Trigger']
 
+    # find rising edges of opto trigger (>1000 indicates trigger)
+    opto_trig_bool = np.concatenate([[0], np.diff((opto_trig > 1000).astype(int)) > 0])
+    opto_inds = np.flatnonzero(opto_trig_bool)
 
-
-    opto_trig_bool = np.concatenate([[0],np.diff((1*(opto_trig>1000)))>0])>0
-    opto_inds = np.argwhere(opto_trig_bool).flatten()
-
-
-    volume_dt = np.diff(np.array(pp.metadata['frame_times']),axis=0)[0,0]    
-    
-    n_frames = int(pp.metadata['mark_points']['duration']/1000/volume_dt)
+    # frame timing and offset calculation
+    volume_dt = np.diff(np.array(pp.metadata['frame_times']), axis=0)[0, 0]
+    n_frames = int(pp.metadata['mark_points']['duration'] / 1000 / volume_dt)
     opto_off_inds = opto_inds + n_frames - 1
 
+    # mask data around opto onsets (avoid contamination) and initial frames
     for ind in opto_inds:
-        pp.timeseries['rois'][:,:,ind:ind+n_frames] = np.nan
-    pp.timeseries['rois'][:,:,:int(2/volume_dt)]=np.nan
+        pp.timeseries['rois'][:, :, ind:ind + n_frames] = np.nan
+    pp.timeseries['rois'][:, :, :int(2 / volume_dt)] = np.nan
 
-    dff = pp.calculate_zscored_F('rois', exp_detrend=False, zscore=True, background_ts='background')[-1,:,:]
-    
-    
-    
-    n_rois, n_points, n_reps, n_frames = dff.shape[0], 8, 5, 2
+    # compute z-scored dF/F for ROIs (last returned array assumed to be per-frame)
+    dff = pp.calculate_zscored_F('rois', exp_detrend=False, zscore=True, background_ts='background')[-1, :, :]
+
+    # expected grid of points x reps (hard-coded in upstream pipeline)
+    n_rois = dff.shape[0]
+    n_points = 8
+    n_reps = 5
+
+    assert n_points * n_reps == len(opto_off_inds), "wrong number of opto inds"
+
+    # reshape indices to (n_reps, n_points) to make indexing explicit
+    inds_matrix = opto_off_inds.reshape((n_reps, n_points))
     opto_resp = np.zeros((n_rois, n_points, n_reps))
 
-    assert n_points*n_reps == len(opto_off_inds), "wrong number of opto inds"
-    mp = 0
     for rep in range(n_reps):
         for point in range(n_points):
-            ind = opto_off_inds[mp]
-           
-            opto_resp[:,point,rep] = np.nanmean(dff[:,ind:ind+3],axis=-1)
-            mp+=1
+            ind = inds_matrix[rep, point]
+            # average a short window after offset (3 frames)
+            opto_resp[:, point, rep] = np.nanmean(dff[:, ind:ind + 3], axis=-1)
 
     if zscore:
+        # zscore across all values per ROI
         for r in range(n_rois):
-            opto_resp[r,:,:] = sp.stats.zscore(opto_resp[r,:,:], axis=None)
+            opto_resp[r, :, :] = sp.stats.zscore(opto_resp[r, :, :], axis=None)
     return opto_resp
-
-
 def plot_min_dist(df, h_ax, x=np.arange(3), color='black', zero=False):
     if not 'post_novis1 mean offset' in df.columns:
     
@@ -91,14 +109,18 @@ def plot_min_dist(df, h_ax, x=np.arange(3), color='black', zero=False):
             h_ax.plot(x, [b,p0,p180], color=color, alpha=.2)
 
 def plot_sess_heatmaps(ts_dict, vmin=-.5, vmax=.5, plot_times = np.arange(0, 180, 60)):
+    """Plot per-session heatmaps aligned to time and heading.
+    
+    Args:
+        ts_dict: Dict with keys 'baseline', 'post_0deg', 'post_180deg' each with
+                 attributes dff, time, heading, dff_h_aligned.
+        vmin, vmax: Color limits for heatmap.
+        plot_times: Time points (in seconds) to mark on x-axis.
+    
+    Returns:
+        fig, ax: Matplotlib figure and axes.
+    """
     fig, ax = plt.subplots(3, 2, figsize=[15,6], sharey=True, sharex=True)
-    
-    
-    def get_time_ticks_inds(time, plot_times):
-        inds = []
-        for t in plot_times:
-            inds.append(np.argmin(np.abs(time-t)))
-        return inds
         
     
     def plot_row(key, row, cmap):
@@ -118,7 +140,7 @@ def plot_sess_heatmaps(ts_dict, vmin=-.5, vmax=.5, plot_times = np.arange(0, 180
         ax[row,0].set_ylabel('ROIs')
         ax[row,0].set_yticks([-0.5,7.5,15.5], labels=[r'0', r'$\pi$', r'$2\pi$'])
         
-        ax[row,0].set_xticks(get_time_ticks_inds(time, plot_times), labels=plot_times)
+        ax[row,0].set_xticks(get_time_tick_indices(time, plot_times), labels=plot_times)
         ax[row,0].set_xlabel('Time (s)')
         
         ax[row,0].set_title(key)
@@ -188,12 +210,6 @@ def plot_sess_heatmaps_w_hist(ts_dict, bins = np.linspace(-np.pi, np.pi, num=17)
     hist_axs.extend([fig.add_subplot(gs[i,1],sharex=hist_axs[0]) for i in range(1,3)])
     cbar_ax = [fig.add_subplot(gs[i,3]) for i in range(3)]
     
-    def get_time_ticks_inds(time, plot_times):
-        inds = []
-        for t in plot_times:
-            inds.append(np.argmin(np.abs(time-t)))
-        return inds
-    
     def plot_row(key, row, cmap):
         dff = ts_dict[key].dff
         heading = ts_dict[key].heading
@@ -220,7 +236,7 @@ def plot_sess_heatmaps_w_hist(ts_dict, bins = np.linspace(-np.pi, np.pi, num=17)
         heatmap_axs[row].yaxis.set_minor_locator(AutoMinorLocator())
         
         _plot_times = plot_times[plot_times<time.iloc[-1]]
-        heatmap_axs[row].set_xticks(get_time_ticks_inds(time, _plot_times), labels=_plot_times)
+        heatmap_axs[row].set_xticks(get_time_tick_indices(time, _plot_times), labels=_plot_times)
         heatmap_axs[row].set_xlabel('Time (s)')
         
         heatmap_axs[row].set_title(key)
@@ -233,8 +249,7 @@ def plot_sess_heatmaps_w_hist(ts_dict, bins = np.linspace(-np.pi, np.pi, num=17)
        
         hist_axs[row].fill_betweenx(centers, 0, hist, color=cmap(.8), alpha=.5)
         
-        # hist_axs[row].set_yticks([-np.pi,-3*np.pi/4, -np.pi/2, -np.pi/4, 0, np.pi/4, np.pi/2, 3*np.pi/4, np.pi], 
-        #                          labels=[r'-$\pi$', '', '', '', r'0','', '', '', r'$\pi$'])
+        
         hist_axs[row].set_yticks([-np.pi, 0,  np.pi], 
                                  labels=[r'-$\pi$',  r'0', r'$\pi$'])
         hist_axs[row].yaxis.set_minor_locator(AutoMinorLocator())
@@ -249,7 +264,6 @@ def plot_sess_heatmaps_w_hist(ts_dict, bins = np.linspace(-np.pi, np.pi, num=17)
         hist_axs[row].yaxis.set_label_position('right')
         hist_axs[row].set_xlabel('Prop.')
         offset_len = np.abs(ts_dict[key].offset_c.mean())
-        # offset_var = sp.stats.circvar(offset, low=-np.pi, high=np.pi)
         hist_axs[row].set_title(f"vec length={offset_len:.2f}" )
       
 
