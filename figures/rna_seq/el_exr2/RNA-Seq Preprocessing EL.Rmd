@@ -1,0 +1,60 @@
+---
+title: "RNA-seq preprocessing EL"
+output: html_notebook
+---
+
+Install the required packages
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+#BiocManager::install(version = "3.14")
+BiocManager::install("edgeR", force = TRUE)
+require(edgeR)
+```
+
+Load the data
+```{r}
+dat_wb <- read.csv("data/rna_seq/lowCellSeq.csv",as.is=T,header=T)
+celltyp_wb <- (do.call(rbind,strsplit(colnames(dat_wb),"_"))[,1])
+dat_wb <- dat_wb[which((celltyp_wb == "wholebrain") | (celltyp_wb == "gene"))]
+
+dat_EL <- read.table("data/rna_seq/EL/SS50573/merged_counts.txt",sep="\t",header=T)
+subset
+dat <- merge(dat_EL, dat_wb, by = "gene_id")
+rownames(dat) <- dat$gene_id
+dat <- dat[c(-1,-2)]
+
+celltyp <- c(do.call(rbind,strsplit(head(colnames(dat),6),"_"))[,4],
+             do.call(rbind,strsplit(tail(colnames(dat),8),"_"))[,1])
+
+dge_table=list()
+```
+
+Run the differential expression vs the whole brain
+```{r}
+celltype1_columns=which(celltyp=="SS50573")
+celltype2_columns=which(celltyp=="wholebrain")
+
+classvec=as.factor(rep(c(1,2),times=c(length(celltype1_columns),length(celltype2_columns))))
+startmat_cpm=sweep(dat[,c(celltype1_columns,celltype2_columns)],2,colSums(dat[,c(celltype1_columns,celltype2_columns)]),"/")*10^6
+e_design=model.matrix(~classvec)
+y2 = DGEList(counts=dat[,c(celltype1_columns,celltype2_columns)])
+y2 = estimateDisp(y2, e_design)
+fit = glmQLFit(y2, e_design)
+qlf.2vs1 <- glmQLFTest(fit, coef=2)
+outval2=topTags(qlf.2vs1,n=nrow(startmat_cpm),p.value=1)
+outval2$table=outval2$table[intersect(rownames(outval2$table),rownames(startmat_cpm)),]
+mean1=apply(startmat_cpm[rownames(outval2$table),classvec==1],1,mean)
+mean2=apply(startmat_cpm[rownames(outval2$table),classvec==2],1,mean)
+frac1=rowSums(startmat_cpm[rownames(outval2$table),classvec==1]>0)/length(celltype1_columns)
+frac2=rowSums(startmat_cpm[rownames(outval2$table),classvec==2]>0)/length(celltype2_columns)
+dge_table[["SS50573_wholebrain"]]=cbind(outval2$table,mean1,mean2,frac1,frac2)
+```
+
+Save the data
+```{r}
+for (tablename in names(dge_table)) {
+    write.csv(dge_table[[tablename]],file=paste0("data/rna_seq/dge/dge_table_",tablename,".csv"))
+}
+```
+
