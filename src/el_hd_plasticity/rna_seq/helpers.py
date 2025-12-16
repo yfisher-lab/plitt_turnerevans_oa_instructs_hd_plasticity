@@ -104,11 +104,8 @@ def names_for_genes_pvals(dge_table: pd.DataFrame, genes_of_int: pd.DataFrame) -
     Returns:
         DataFrame with columns ['gene_names', 'PValue'] for overlapping genes.
     """
-    # Try common patterns for gene id column
-    possible_gene_cols = [c for c in dge_table.columns if 'gene' in c.lower()]
-    if not possible_gene_cols:
-        raise KeyError('Could not find gene ID column in dge_table')
-    gene_col = possible_gene_cols[0]
+    
+    gene_col = 'Unnamed: 0'
 
     # Prepare a mapping from gene_id to name
     mapping = genes_of_int.set_index('gene_id')['name'].to_dict()
