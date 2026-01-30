@@ -9,7 +9,7 @@ description = "Code to reproduce figures in Plitt & Turner-Evans et al (2025) bi
 authors = [
     {name = "Mark Plitt", email = "mark.plitt@berkeley.edu"}
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 dependencies = [
     "numpy",
     "scipy",
@@ -21,7 +21,6 @@ dependencies = [
     "papermill",
     "nbdime",
     "ipykernel",
-    "sessiontools @ git+https://github.com/yfisher-lab/SessionTools.git",
     "ipywidgets",
 ]
 
