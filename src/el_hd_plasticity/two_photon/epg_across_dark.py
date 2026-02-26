@@ -81,7 +81,7 @@ def plot_transpose_heatmaps(ts_dict, vmin=-.5, vmax=.5, plot_times=np.arange(0, 
 
 
 
-
+ 
 def plot_sess_heatmaps(ts_dict, vmin=-.5, vmax=.5, plot_times=np.arange(0, 360, 60), twindow=None):
     """Plot heatmaps of DFF activity across three experimental conditions.
     
@@ -208,8 +208,8 @@ def plot_sess_heatmaps_w_hist(ts_dict, bins=np.linspace(-np.pi, np.pi, num=17), 
     Returns:
         Tuple of (figure, (heatmap_axs, hist_axs, cbar_ax)).
     """
-    fig = plt.figure(figsize=[8, 6])
-    gs = GS(3, 4, figure=fig, width_ratios=[6, 1, .8, .2], wspace=.05, hspace=.8)
+    fig = plt.figure(figsize=[8, 2])
+    gs = GS(1, 4, figure=fig, width_ratios=[6, 1, .8, .2], wspace=.05, hspace=.8)
     heatmap_axs = [fig.add_subplot(gs[0, 0])]
     heatmap_axs.extend([fig.add_subplot(gs[i, 0], sharey=heatmap_axs[0]) for i in range(1, 3)])
     hist_axs = [fig.add_subplot(gs[0, 1])]
@@ -260,9 +260,8 @@ def plot_sess_heatmaps_w_hist(ts_dict, bins=np.linspace(-np.pi, np.pi, num=17), 
         offset_len = np.abs(ts.offset_c.mean())
         hist_axs[row].set_title(f"vec length={offset_len:.2f}")
 
-    plot_row('closed_loop 1', 0, plt.cm.Greys)
-    plot_row('dark', 1, plt.cm.Purples)
-    plot_row('closed_loop 2', 2, plt.cm.Greys, hatch='/')
+    plot_row('closed_loop 1', 0, plt.cm.Greens)
+    
     hist_axs[0].set_xlim(left=0)
     
     fig.suptitle(ts_dict['fly'])

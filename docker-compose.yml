@@ -1,52 +1,22 @@
 version: '3.8'
 
 services:
-  # Main application service for running analysis scripts and notebooks
-  analysis:
+  app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: plasticity-analysis
+    container_name: el_hd_plasticity
     volumes:
-      - .:/workspace
-      - data:/workspace/data
-      - figures:/workspace/figures
-    working_dir: /workspace
+      # Mount SSD storage for persistent access
+      - /media/mplitt/SSD_storage:/media/mplitt/SSD_storage
+      # Optional: mount the workspace for live development
+      - .:/app
+    working_dir: /app
     environment:
       - PYTHONUNBUFFERED=1
-    command: /bin/bash
     stdin_open: true
     tty: true
-    networks:
-      - analysis-network
-
-  # Jupyter notebook server for interactive analysis
-  jupyter:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: plasticity-jupyter
+    # Uncomment below if you need port exposure (e.g., for Jupyter)
     ports:
+      - "8000:8000"
       - "8888:8888"
-    volumes:
-      - .:/workspace
-      - data:/workspace/data
-      - figures:/workspace/figures
-    working_dir: /workspace
-    environment:
-      - PYTHONUNBUFFERED=1
-    command: jupyter lab --ip=0.0.0.0 --allow-root --no-browser --NotebookApp.token='' --NotebookApp.password=''
-    networks:
-      - analysis-network
-    depends_on:
-      - analysis
-
-volumes:
-  data:
-    driver: local
-  figures:
-    driver: local
-
-networks:
-  analysis-network:
-    driver: bridge

@@ -15,6 +15,9 @@ import matplotlib.gridspec as gridspec
 import SessionTools.two_photon as st2p
 from . import session, utilities
 
+from matplotlib.ticker import (MultipleLocator, AutoMinorLocator)
+from matplotlib.gridspec import GridSpec as GS
+
 
 
 class SessMaker():
@@ -506,3 +509,101 @@ def plot_sess_histograms(ts_dict, bins=np.linspace(-np.pi, np.pi, num=17),
     fig_polar.tight_layout()
     
     return (fig_hist, ax_hist), (fig_polar, ax_polar)
+
+
+def _apply_time_window(dff, heading, time, twindow=None):
+    """Apply a time window mask to data arrays.
+    
+    Args:
+        dff: DFF data array.
+        heading: Heading data array.
+        time: Time array.
+        twindow: Tuple of (start_time, end_time) or None for all data.
+        
+    Returns:
+        Tuple of (dff_masked, heading_masked, time_masked, mask).
+    """
+    if twindow is not None:
+        mask = (time >= twindow[0]) & (time <= twindow[1])
+    else:
+        mask = np.ones_like(time, dtype=bool)
+    
+    return dff[:, mask], heading[mask], time[mask], mask
+
+def plot_sess_heatmaps_w_hist(ts_dict, bins=np.linspace(-np.pi, np.pi, num=17), vmin=-.5, vmax=.5,
+                              plot_times=np.arange(0, 360, 60), twindow=None):
+    """Plot heatmaps with integrated offset histograms for all three conditions.
+    
+    Creates a 3-row layout showing DFF heatmaps alongside offset histograms for each
+    experimental condition.
+    
+    Args:
+        ts_dict: Dictionary with 'fly' key and condition keys containing timeseries objects.
+        bins: Bins for histogram computation.
+        vmin: Minimum value for heatmap colorscale.
+        vmax: Maximum value for heatmap colorscale.
+        plot_times: Time points to mark on x-axis.
+        twindow: Optional tuple (start_time, end_time) to limit data window.
+        
+    Returns:
+        Tuple of (figure, (heatmap_axs, hist_axs, cbar_ax)).
+    """
+    fig = plt.figure(figsize=[8, 2])
+    gs = GS(1, 4, figure=fig, width_ratios=[6, 1, .8, .2], wspace=.05, hspace=.8)
+    heatmap_axs = [fig.add_subplot(gs[0]),]
+    # heatmap_axs.extend([fig.add_subplot(gs[i, 0], sharey=heatmap_axs[0]) for i in range(1, 3)])
+    hist_axs = [fig.add_subplot(gs[1]),]
+    # hist_axs.extend([fig.add_subplot(gs[i, 1], sharex=hist_axs[0]) for i in range(1, 3)])
+    # cbar_ax = [fig.add_subplot(gs[i, 3]) for i in range(3)]
+    cbar_ax = [fig.add_subplot(gs[3]),]
+    
+    def plot_row(key, row, cmap, hatch=None):
+        ts = ts_dict[key]
+        dff, heading_masked, time, _ = _apply_time_window(ts.dff, ts.heading, ts.time, twindow)
+        
+        x = np.arange(dff.shape[1])
+        heading_ = (heading_masked + np.pi) / (2 * np.pi) * 15
+        h = heatmap_axs[row].imshow(dff, aspect='auto', cmap=cmap, interpolation='none', vmin=vmin, vmax=vmax)
+        fig.colorbar(h, cax=cbar_ax[row])
+        heatmap_axs[row].scatter(x, heading_, color='orange', s=5)
+
+        heatmap_axs[row].set_ylabel('ROIs')
+        heatmap_axs[row].set_yticks([-0.5, 7.5, 15.5], labels=[r'0', r'$\pi$', r'$2\pi$'])
+        heatmap_axs[row].yaxis.set_minor_locator(AutoMinorLocator())
+        
+        _plot_times = plot_times[plot_times < time.iloc[-1]]
+        heatmap_axs[row].set_xticks(utilities.get_time_tick_indices(time, _plot_times), labels=_plot_times)
+        heatmap_axs[row].set_xlabel('Time (s)')
+        heatmap_axs[row].set_title(key)
+
+        centers = (bins[:-1] + bins[1:]) / 2
+        hist, _ = np.histogram(ts.offset, bins=bins)
+        hist = hist / hist.sum()
+        
+        if hatch is None:
+            hist_axs[row].fill_betweenx(centers, 0, hist, color=cmap(.8), alpha=.5)
+        else:
+            hist_axs[row].fill_betweenx(centers, 0, hist, alpha=1, hatch=hatch, 
+                                       color='none', edgecolor=cmap(.8))
+
+        hist_axs[row].set_yticks([-np.pi, 0, np.pi], labels=[r'-$\pi$', r'0', r'$\pi$'])
+        hist_axs[row].yaxis.set_minor_locator(AutoMinorLocator())
+        hist_axs[row].set_ylim([np.pi, -np.pi])
+        hist_axs[row].grid(True, axis='y', linestyle='-', alpha=0.8, linewidth=2.5, which='major')
+        ygridlines = hist_axs[row].get_ygridlines()
+        ygridlines[1].set_color('orange')
+        hist_axs[row].grid(True, axis='y', linestyle=':', alpha=0.5, linewidth=1.5, which='minor')
+        hist_axs[row].set_ylabel('Offset')
+        hist_axs[row].yaxis.tick_right()
+        hist_axs[row].yaxis.set_label_position('right')
+        hist_axs[row].set_xlabel('Prop.')
+
+        offset_len = np.abs(ts.offset_c.mean())
+        hist_axs[row].set_title(f"vec length={offset_len:.2f}")
+
+    
+    plot_row('closed loop', 0, plt.cm.Greens)
+    hist_axs[0].set_xlim(left=0)
+    
+    fig.suptitle(ts_dict['fly'])
+    return fig, (heatmap_axs, hist_axs, cbar_ax)

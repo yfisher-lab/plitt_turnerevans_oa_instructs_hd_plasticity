@@ -22,6 +22,9 @@ dependencies = [
     "nbdime",
     "ipykernel",
     "ipywidgets",
+    "pingouin",
+    "statsmodels",
+    "sessiontools @ git+https://github.com/yfisher-lab/SessionTools.git",
 ]
 
 [project.optional-dependencies]

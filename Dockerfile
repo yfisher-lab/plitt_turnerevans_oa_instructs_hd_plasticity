@@ -1,33 +1,24 @@
-FROM python:3.10-slim
+FROM python:3.11-slim
 
-# Set environment variables
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    git \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+# Install uv package manager
+RUN pip install --no-cache-dir uv
 
-# Create workspace directory
-WORKDIR /workspace
+# Copy the uv.lock and pyproject.toml files
+COPY uv.lock pyproject.toml ./
 
-# Copy project files
-COPY pyproject.toml .
-COPY src/ src/
+# Install dependencies using uv
+RUN uv pip install --system -r <(uv pip compile uv.lock) --require-hashes
+
+# Copy the rest of the application
 COPY . .
 
-# Install the project and dependencies
-RUN pip install --upgrade pip setuptools wheel && \
-    pip install -e . && \
-    pip install jupyter jupyterlab ipykernel
+# Install the package in development mode
+RUN pip install -e .
 
-# Install git-based dependencies
-RUN pip install git+https://github.com/yfisher-lab/SessionTools.git
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
 
-# Create kernel for Jupyter
-RUN python -m ipykernel install --user --name python310 --display-name "Python 3.10"
-
-CMD ["/bin/bash"]
+# Default command
+CMD ["python"]
