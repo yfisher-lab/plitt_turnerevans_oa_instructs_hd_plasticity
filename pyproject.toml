@@ -24,7 +24,11 @@ dependencies = [
     "ipywidgets",
     "pingouin",
     "statsmodels",
+    "pillow",
+    "imageio[ffmpeg]",
     "sessiontools @ git+https://github.com/yfisher-lab/SessionTools.git",
+    "napari[all]",
+    "pyqt",
 ]
 
 [project.optional-dependencies]

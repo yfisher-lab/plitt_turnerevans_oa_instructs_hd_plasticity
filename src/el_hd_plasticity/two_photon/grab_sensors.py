@@ -531,7 +531,7 @@ def _apply_time_window(dff, heading, time, twindow=None):
     return dff[:, mask], heading[mask], time[mask], mask
 
 def plot_sess_heatmaps_w_hist(ts_dict, bins=np.linspace(-np.pi, np.pi, num=17), vmin=-.5, vmax=.5,
-                              plot_times=np.arange(0, 360, 60), twindow=None):
+                              plot_times=np.arange(0, 360, 60), twindow=None, cmap = plt.cm.Greens):
     """Plot heatmaps with integrated offset histograms for all three conditions.
     
     Creates a 3-row layout showing DFF heatmaps alongside offset histograms for each
@@ -602,7 +602,7 @@ def plot_sess_heatmaps_w_hist(ts_dict, bins=np.linspace(-np.pi, np.pi, num=17), 
         hist_axs[row].set_title(f"vec length={offset_len:.2f}")
 
     
-    plot_row('closed loop', 0, plt.cm.Greens)
+    plot_row('closed loop', 0, cmap)
     hist_axs[0].set_xlim(left=0)
     
     fig.suptitle(ts_dict['fly'])
