@@ -17,7 +17,7 @@ from . import session, utilities
 
 
 
-def offset_stats(sess_df, load_row):
+def offset_stats(sess_df, load_row, **kwargs):
     """Compute offset statistics (variance, mean, magnitude) for each session.
     
     Computes circular statistics on EPG offset (difference between heading and PVA)
@@ -33,7 +33,7 @@ def offset_stats(sess_df, load_row):
     rows = []
     
     for _, row in sess_df.iterrows():
-        ts = session.GetTS(load_row(row))
+        ts = session.GetTS(load_row(row), **kwargs)
         offset_c = ts.offset_c.mean()
         
         rows.append({

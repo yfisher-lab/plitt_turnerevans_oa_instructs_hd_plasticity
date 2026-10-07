@@ -202,7 +202,7 @@ class GetTS():
 
         
         
-    def get_ts(self, channels=-1, exp_detrend=True, zscore=True, background_ts='background',
+    def get_ts(self, channels=-1, exp_detrend=True, background_ts='background',
                circ_sigma=.5, t_sigma=.1, h_sigma=.1, neural_shift=-.2, dh_sigma=0):
         """Extract and compute timeseries and circular statistics from preprocessed session.
         
@@ -230,7 +230,10 @@ class GetTS():
             x_h, y_h = sp.ndimage.gaussian_filter1d(x_h, h_sigma/self.dt), sp.ndimage.gaussian_filter1d(y_h, h_sigma/self.dt)
         _, self.heading_sm = st2p.utilities.cart2pol(x_h, y_h)
         
-        self.dff = self.pp.calculate_zscored_F('rois', exp_detrend=exp_detrend, zscore=zscore, 
+        self.dff = self.pp.calculate_zscored_F('rois', exp_detrend=exp_detrend, zscore=True, 
+                                               background_ts=background_ts)[channels,:,:]
+
+        self.dff_noz = self.pp.calculate_zscored_F('rois', exp_detrend=exp_detrend, zscore=False, 
                                                background_ts=background_ts)[channels,:,:]
         
         if t_sigma > 0:
@@ -240,6 +243,9 @@ class GetTS():
         # self.dff = sp.ndimage.gaussian_filter1d(sp.ndimage.gaussian_filter1d(self.dff, t_sigma/self.dt, axis=-1),
         #                                         circ_sigma,axis=-2, mode='wrap')
         
+        # self.dff -= np.amin(self.dff,axis=-1, keepdims=True) 
+        # self.dff += 1E-3
+
         self.dff = np.roll(self.dff, neural_shift_inds, axis=-1)
         
         self.n_rois = self.dff.shape[-2]  
@@ -264,9 +270,13 @@ class GetTS():
                 _,self.offset[chan,:] = st2p.utilities.cart2pol(*st2p.utilities.pol2cart(np.ones(self.heading.shape),self.phi[chan,:]-self.heading))
             
 
-        self.outer_ring = np.squeeze(self.pp.calculate_zscored_F('outer_ring', exp_detrend=exp_detrend, zscore=zscore,
+        self.outer_ring = np.squeeze(self.pp.calculate_zscored_F('outer_ring', exp_detrend=exp_detrend, zscore=True,
                                                      background_ts=background_ts))
         self.outer_ring = sp.ndimage.gaussian_filter1d(self.outer_ring, t_sigma/self.dt)
+
+        self.outer_ring_noz = np.squeeze(self.pp.calculate_zscored_F('outer_ring', exp_detrend=exp_detrend, zscore=False,
+                                                             background_ts=background_ts))
+        self.outer_ring_noz = sp.ndimage.gaussian_filter1d(self.outer_ring_noz, t_sigma/self.dt)
 
         dh = np.diff(np.unwrap(self.heading_sm))/self.dt
         self.dh = np.concatenate([[0], dh])
