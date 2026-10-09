@@ -155,7 +155,7 @@ def _smooth_activity(dff, dt, t_sigma, circ_sigma, neural_shift):
 # Immutable result objects
 # ----------------------------------------------------------------------------
 @dataclass(frozen=True, eq=False, repr=False)
-class RingTimeseries:
+class EllipsoidBodyTimeseries:
     """Neural activity around a ring of ROIs with circular statistics; immutable.
 
     Fields cannot be reassigned, and the NumPy arrays among them are frozen
@@ -236,14 +236,14 @@ class RingTimeseries:
 
 
 @dataclass(frozen=True, eq=False, repr=False)
-class TrialTimeseries(RingTimeseries):
+class TrialTimeseries(EllipsoidBodyTimeseries):
     """Timeseries from Dan Turner-Evans' behavioral/neural data: EPG and EL channels.
 
-    Attributes (in addition to those of :class:`RingTimeseries`):
+    Attributes (in addition to those of :class:`EllipsoidBodyTimeseries`):
         trial_dict: Dict with behavioral data and neural timeseries by channel.
         channel_mapping: Dict mapping channel names ('EPG', 'EL') to trial_dict keys.
-        dff: Shape (2, n_rois, n_timepoints), channel 0 = EPG, 1 = EL; the other per-channel
-            fields (offset, phi, rho, pv_c, dff_h_aligned, fwhm) follow the same order.
+        dff: Neural timeseries; shape (2, n_rois, n_timepoints), channel 0 = EPG, 1 = EL.
+        offset, phi, rho, pv_c, dff_h_aligned, fwhm: Per channel; see :class:`_EllipsoidBodyTimeseries`.
     """
 
     trial_dict: Any
@@ -280,10 +280,10 @@ class TrialTimeseries(RingTimeseries):
 
 
 @dataclass(frozen=True, eq=False, repr=False)
-class SessionTimeseries(RingTimeseries):
+class SessionTimeseries(EllipsoidBodyTimeseries):
     """Timeseries from a preprocessed imaging session: (z-scored) dF/F of the ROIs plus the outer ring.
 
-    Attributes (in addition to those of :class:`RingTimeseries`):
+    Attributes (in addition to those of :class:`EllipsoidBodyTimeseries`):
         pp: Preprocessed session object with voltage recordings and calcium imaging data.
         dff: Z-scored, smoothed dF/F; shape (n_rois, n_timepoints) or
             (n_channels, n_rois, n_timepoints) depending on the ``channels`` index.

@@ -32,7 +32,7 @@ def _meta(row, meta_cols):
 # ----------------------------------------------------------------------------
 # Offset statistics
 # ----------------------------------------------------------------------------
-def offset_stats(sess_df, load_row, meta_cols=None, **ts_kwargs):
+def offset_stats(session_manager, meta_cols=None, **ts_kwargs):
     """Compute offset statistics (variance, mean, magnitude) for each session and channel.
 
     Computes circular statistics on the EPG offset (difference between heading and PVA)
@@ -40,8 +40,7 @@ def offset_stats(sess_df, load_row, meta_cols=None, **ts_kwargs):
     (channels, time), e.g. ``channels=[0, 1]``) give one row per session per channel.
 
     Args:
-        sess_df: Session DataFrame.
-        load_row: Callable that loads preprocessed data for a session row.
+        session_manager: Session manager object.
         meta_cols: Session-table columns copied to the result under the same names.
             Defaults to ``('fly_id', 'closed_loop')``.
         **ts_kwargs: Passed to :meth:`session.SessionTimeseries.from_session`.
@@ -54,20 +53,19 @@ def offset_stats(sess_df, load_row, meta_cols=None, **ts_kwargs):
     meta_cols = BASIC_META_COLS if meta_cols is None else meta_cols
     rows = []
 
-    for _, row in sess_df.iterrows():
-        ts = session.GetTS(load_row(row), **ts_kwargs)
+    for _, row in session_manager.iterrows():
+        pp = session_manager.load_row(row)
+        ts = session.SessionTimeseries.from_session(pp, **ts_kwargs)
+
         multichannel = ts.offset_c.ndim > 1
         offset_c = ts.offset_c if multichannel else ts.offset_c[np.newaxis]     # (channels, time)
-        offset = ts.offset if multichannel else ts.offset[np.newaxis]
 
         mean_c = offset_c.mean(axis=-1)
-        offset_var = sp.stats.circvar(offset, axis=-1)
 
         for channel in range(offset_c.shape[0]):
             rows.append({
                 **_meta(row, meta_cols),
                 **({'channel': channel} if multichannel else {}),
-                'offset_var': offset_var[channel],
                 'offset_mean': np.angle(mean_c[channel]),
                 'offset_mag': np.abs(mean_c[channel])
             })
@@ -123,15 +121,12 @@ def offset_stats_unique(stats_df, group_col=None, min_cl=1, dark_col='dark'):
                 continue
 
             for cl, dark, mask in ((1, 0, cl_mask), (0, 1, dark_mask)):
-                var = stats_df['offset_var'].loc[mask].mean()
                 rows.append({
                     'fly_id': fly,
                     **({} if channel is None else {'channel': channel}),
                     'closed_loop': cl,
                     **group,
                     'dark': dark,
-                    'offset_var': var,
-                    'offset_var_logit': sp.special.logit(var),
                     'offset_mean': sp.stats.circmean(stats_df['offset_mean'].loc[mask]),
                     'offset_mag': stats_df['offset_mag'].loc[mask].mean()
                 })
@@ -169,8 +164,6 @@ def offset_stats_plot(stats_df_unique, group_col=None):
                 'fly_id': fly,
                 **({} if channel is None else {'channel': channel}),
                 **group,
-                'offset_var_dark': dark_data['offset_var'],
-                'offset_var_closed_loop': cl_data['offset_var'],
                 'offset_mag_dark': dark_data['offset_mag'],
                 'offset_mag_closed_loop': cl_data['offset_mag']
             })

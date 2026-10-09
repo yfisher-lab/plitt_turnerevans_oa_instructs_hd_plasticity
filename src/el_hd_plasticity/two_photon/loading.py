@@ -117,6 +117,8 @@ class SessionManager:
 
         self.add_fly_id()
         self.filter_usable()
+        self.load_row = make_load_row(basedir=self.basedir, folder_cols=folder_cols)
+        
 
     def add_fly_id(self):
         """Create unique fly identifiers: ``<date>_<fly>`` plus ``_<column>_<value>`` for each of `id_cols`."""
@@ -141,17 +143,6 @@ class SessionManager:
         """
         self._sess_df = self._sess_df.loc[filter_mask]
 
-    def load_row(self, row):
-        """Load preprocessed imaging data for a session row.
-
-        Args:
-            row: Session row from sess_df (needs ``date``, ``fly`` and ``session``).
-
-        Returns:
-            EBImagingSession object with preprocessed data.
-        """
-        return load_session(session_path(row, basedir=self.basedir, folder_cols=self._folder_cols, basedir_col=self._basedir_col))
-
     @property
     def sess_df(self):
         """Return the session DataFrame"""
@@ -161,3 +152,9 @@ class SessionManager:
     def fly_ids(self):
         """Return array of unique fly identifiers."""
         return self._sess_df['fly_id'].unique()
+
+    def iterrows(self):
+        """Iterate over sessions as (index, row) pairs; alias for ``sess_df.iterrows()``."""
+        return self.sess_df.iterrows()
+
+
