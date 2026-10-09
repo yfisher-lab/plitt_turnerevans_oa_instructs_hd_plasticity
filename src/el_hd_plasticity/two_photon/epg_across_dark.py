@@ -1,6 +1,6 @@
 """Figures for EPG imaging across closed loop, dark, and closed loop again.
 
-Each figure takes ``ts_dict``: a dict with a ``'fly'`` name and :class:`session.GetTS` objects
+Each figure takes ``ts_dict``: a dict with a ``'fly'`` name and :class:`session.SessionTimeseries` objects
 for the three epochs ``'closed_loop 1'``, ``'dark'`` and ``'closed_loop 2'``.
 """
 

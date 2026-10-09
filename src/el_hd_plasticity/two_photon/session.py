@@ -1,29 +1,167 @@
 """Session timeseries extraction and analysis for two-photon imaging data.
 
-Provides classes for extracting neural timeseries, computing circular statistics
-(heading, offset, population vector), and aligning activity to behavior.
+Provides immutable timeseries objects for neural activity around a ring of ROIs, with circular
+statistics (heading, offset, population vector) and activity aligned to heading.
 
-Two data sources are supported, sharing the same circular-statistics machinery
-(:class:`_RingTimeseries`):
+Two data sources are supported, sharing the same statistics (:class:`RingTimeseries`):
 
-* :class:`GetTS` - preprocessed SessionTools imaging sessions (``EBImagingSession``).
-* :class:`GetTS_DTE` - behavioral/neural trial dictionaries from Dan Turner-Evans' dataset.
+* :class:`SessionTimeseries` - preprocessed SessionTools imaging sessions (``EBImagingSession``):
+  ``SessionTimeseries.from_session(pp, ...)``.
+* :class:`TrialTimeseries` - behavioral/neural trial dictionaries from Dan Turner-Evans' dataset:
+  ``TrialTimeseries.from_trial_dict(trial_dict, channel_mapping, ...)``.
+
+``GetTS`` and ``GetTS_DTE`` are the historical names of the two constructors and remain as aliases
+of ``SessionTimeseries.from_session`` and ``TrialTimeseries.from_trial_dict``.
+
+The computation lives in the module-level functions below; the classes only hold the results.
 """
+
+from dataclasses import dataclass, fields
+from typing import Any
 
 import numpy as np
 import scipy as sp
 import SessionTools.two_photon as st2p
 
 from . import ring_analysis
-from .utilities import HEADING_CENTER_ROI
+from .utilities import HEADING_CENTER_ROI, heading_to_roi_index
 
 
-class _RingTimeseries:
-    """Shared circular statistics for neural activity arranged around a ring of ROIs.
+# ----------------------------------------------------------------------------
+# Computation (pure functions of arrays)
+# ----------------------------------------------------------------------------
+def _smooth_heading(heading, dt, h_sigma):
+    """Heading smoothed as a unit vector (no wrap-around artifacts).
 
-    Subclasses are responsible for loading data and setting ``time``, ``dt``, ``heading``
-    and ``dff`` (see ``get_ts``); this class provides the heading smoothing, population
-    vector / offset computation, heading alignment and width measurement common to both.
+    Args:
+        heading: Heading in radians.
+        dt: Sample period (s).
+        h_sigma: Gaussian width in seconds; no smoothing if 0.
+    """
+    x_h, y_h = st2p.utilities.pol2cart(np.ones_like(heading), heading)
+    if h_sigma > 0:
+        x_h = sp.ndimage.gaussian_filter1d(x_h, h_sigma / dt)
+        y_h = sp.ndimage.gaussian_filter1d(y_h, h_sigma / dt)
+    _, heading_sm = st2p.utilities.cart2pol(x_h, y_h)
+    return heading_sm
+
+
+def _heading_velocity(heading_sm, dt, dh_sigma):
+    """Derivative of the smoothed heading (rad/s; 0 at the first sample), optionally Gaussian smoothed.
+
+    Args:
+        heading_sm: Smoothed heading in radians.
+        dt: Sample period (s).
+        dh_sigma: Gaussian width in seconds; no smoothing if 0.
+    """
+    dh = np.concatenate([[0], np.diff(np.unwrap(heading_sm)) / dt])
+    if dh_sigma > 0:
+        dh = sp.ndimage.gaussian_filter1d(dh, dh_sigma / dt)
+    return dh
+
+
+def _population_vector(dff, heading):
+    """Population vector and heading offset of ring activity.
+
+    ROIs are treated as unit vectors at the centers of ``n_rois`` equal angular bins spanning
+    -pi to pi, weighted by activity.
+
+    Args:
+        dff: (n_rois, T) or (n_channels, n_rois, T) activity.
+        heading: Heading in radians, length T.
+
+    Returns:
+        Tuple (n_rois, pv_c, rho, phi, offset): the population vector as a complex number, its
+        magnitude and angle, and the angle relative to heading wrapped to (-pi, pi]. Each is
+        (T,) for (n_rois, T) input and (n_channels, T) otherwise.
+    """
+    n_rois = dff.shape[-2]
+    roi_angle = np.linspace(-np.pi, np.pi, num=n_rois + 1)[:, np.newaxis]
+    roi_angle = roi_angle[:-1] + np.diff(roi_angle, axis=0) / 2  # center of each ROI bin
+
+    channels = dff[np.newaxis] if dff.ndim == 2 else dff
+    n_chan, n_time = channels.shape[0], channels.shape[-1]
+    pv_c = np.zeros((n_chan, n_time), dtype=complex)
+    rho = np.zeros((n_chan, n_time))
+    phi = np.zeros((n_chan, n_time))
+    offset = np.zeros((n_chan, n_time))
+
+    for chan in range(n_chan):
+        x_f, y_f = st2p.utilities.pol2cart(channels[chan], roi_angle)
+        x_mu, y_mu = x_f.mean(axis=0), y_f.mean(axis=0)
+        pv_c[chan] = x_mu + 1j * y_mu
+        rho[chan], phi[chan] = np.abs(pv_c[chan]), np.angle(pv_c[chan])
+        offset[chan] = np.angle(np.exp(1j * (phi[chan] - heading)))
+
+    if dff.ndim == 2:
+        pv_c, rho, phi, offset = pv_c[0], rho[0], phi[0], offset[0]
+    return n_rois, pv_c, rho, phi, offset
+
+
+def _align_to_heading(dff, heading):
+    """Shift each time point's activity profile, to sub-ROI precision, so heading is at a fixed ROI.
+
+    At every time point the profile is shifted along the ROI axis so the current heading falls on ROI
+    ``HEADING_CENTER_ROI``, enabling averaging of activity at each heading. The heading is not
+    binned: it is converted to a fractional ROI index (:func:`utilities.heading_to_roi_index`; one
+    ROI = ``2pi / n_rois`` of heading, ROI centers at ``-pi + (j + 1/2) * 2pi / n_rois``) and the
+    profile is shifted by that amount with the Fourier shift theorem (a phase ramp across spatial
+    frequencies), which interpolates band-limited profiles exactly. A shift by a whole number of
+    ROIs is the same as ``np.roll``. For an even number of ROIs the Nyquist component keeps only
+    its real part.
+
+    Args:
+        dff: (n_rois, T) or (n_channels, n_rois, T) activity.
+        heading: Full-resolution heading in radians, length T.
+
+    Returns:
+        Real array with the shape of `dff`.
+    """
+    n = dff.shape[-2]
+    shift = heading_to_roi_index(heading, n) - HEADING_CENTER_ROI    # aligned[..., j, t] = dff[..., j + shift[t], t]
+
+    freqs = np.arange(n // 2 + 1)
+    phase = np.exp(2j * np.pi * freqs[:, np.newaxis] * shift[np.newaxis, :] / n)    # (freqs, time)
+    spectrum = np.fft.rfft(dff, axis=-2)                                            # (..., freqs, time)
+    return np.fft.irfft(spectrum * phase, n=n, axis=-2)
+
+
+def _profile_widths(dff):
+    """FWHM of the mean peak-aligned profile (see :func:`ring_analysis.mean_profile_fwhm`): a float for
+    (n_rois, T) input, an array with one value per channel for (n_channels, n_rois, T)."""
+    if dff.ndim > 2:
+        return np.array([ring_analysis.mean_profile_fwhm(channel) for channel in dff])
+    return ring_analysis.mean_profile_fwhm(dff)
+
+
+def _smooth_activity(dff, dt, t_sigma, circ_sigma, neural_shift):
+    """Gaussian smoothing in time and across the ring, then a time shift aligning neural to behavior.
+
+    Args:
+        dff: (..., n_rois, T) activity.
+        dt: Sample period (s).
+        t_sigma: Gaussian width in seconds along time; no smoothing if 0.
+        circ_sigma: Gaussian width in ROI bins across the (circular) ROI axis; no smoothing if 0.
+        neural_shift: Time offset in seconds (typically negative), applied as a circular shift.
+    """
+    if t_sigma > 0:
+        dff = sp.ndimage.gaussian_filter1d(dff, t_sigma / dt, axis=-1)
+    if circ_sigma > 0:
+        dff = sp.ndimage.gaussian_filter1d(dff, circ_sigma, axis=-2, mode='wrap')
+    return np.roll(dff, int(neural_shift / dt), axis=-1)
+
+
+# ----------------------------------------------------------------------------
+# Immutable result objects
+# ----------------------------------------------------------------------------
+@dataclass(frozen=True, eq=False, repr=False)
+class RingTimeseries:
+    """Neural activity around a ring of ROIs with circular statistics; immutable.
+
+    Fields cannot be reassigned, and the NumPy arrays among them are frozen
+    (``ts.dff[0] = 0`` raises ``ValueError``); copy first to edit (``ts.dff.copy()``). ``time`` (a
+    pandas Series) and the dict fields of subclasses cannot be frozen, so they are protected from
+    reassignment only. Build instances with the ``from_*`` classmethods of the subclasses.
 
     Attributes:
         dff: Neural timeseries; shape (n_rois, n_timepoints) or (n_channels, n_rois, n_timepoints).
@@ -34,30 +172,37 @@ class _RingTimeseries:
         phi: Population vector angle.
         rho: Population vector magnitude.
         pv_c: Population vector as a complex number (rho * exp(1j * phi)).
-        heading_bins: Edges of the heading bins used by ``heading_aligned``.
-        dff_h_aligned: Neural activity rolled so heading is at a fixed ROI.
-        time: Time of each sample (seconds).
+        dff_h_aligned: Neural activity shifted (to sub-ROI precision) so heading is at a fixed ROI.
+        time: Time of each sample (seconds, pandas Series).
         n_rois: Number of ROIs around the ring.
         dt: Mean sample period (seconds).
-        fwhm: Width of the mean peak-aligned profile (radians); a list for multi-channel data.
+        fwhm: Width of the mean peak-aligned profile (radians); an array with one value per
+            channel for multi-channel data.
     """
 
-    def __init__(self):
-        """Declare the attributes filled in by the subclass' ``get_ts`` and the methods below."""
-        self.dff = None
-        self.heading = None
-        self.heading_sm = None
-        self.dh = None
-        self.offset = None
-        self.phi = None
-        self.rho = None
-        self.pv_c = None
-        self.heading_bins = None
-        self.dff_h_aligned = None
-        self.time = None
-        self.n_rois = None
-        self.dt = None
-        self.fwhm = None
+    dff: np.ndarray
+    heading: np.ndarray
+    heading_sm: np.ndarray
+    dh: np.ndarray
+    offset: np.ndarray
+    phi: np.ndarray
+    rho: np.ndarray
+    pv_c: np.ndarray
+    dff_h_aligned: np.ndarray
+    time: Any
+    n_rois: int
+    dt: float
+    fwhm: Any
+
+    def __post_init__(self):
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if isinstance(value, np.ndarray):
+                value.flags.writeable = False
+
+    def __repr__(self):
+        n_chan = f", n_channels={self.dff.shape[0]}" if self.dff.ndim == 3 else ""
+        return f"{type(self).__name__}(n_rois={self.n_rois}{n_chan}, n_samples={self.dff.shape[-1]}, dt={self.dt:.4g})"
 
     @property
     def offset_c(self):
@@ -68,116 +213,50 @@ class _RingTimeseries:
         """
         return np.exp(1j * self.offset)
 
-    def _smooth_heading(self, h_sigma):
-        """Set ``heading_sm``: heading smoothed as a unit vector (no wrap-around artifacts).
+    @classmethod
+    def _from_arrays(cls, *, dff, heading, time, dt, h_sigma, dh_sigma, **extra):
+        """Compute the shared statistics from smoothed activity and heading and build the object.
 
         Args:
-            h_sigma: Gaussian width in seconds; no smoothing if 0.
+            dff: Smoothed activity, (n_rois, T) or (n_channels, n_rois, T).
+            heading: Heading in radians, length T.
+            time: Time of each sample.
+            dt: Sample period (s).
+            h_sigma: Gaussian width in seconds for smoothing heading.
+            dh_sigma: Gaussian width in seconds for smoothing heading velocity.
+            **extra: Additional fields of the subclass.
         """
-        x_h, y_h = st2p.utilities.pol2cart(np.ones_like(self.heading), self.heading)
-        if h_sigma > 0:
-            x_h = sp.ndimage.gaussian_filter1d(x_h, h_sigma / self.dt)
-            y_h = sp.ndimage.gaussian_filter1d(y_h, h_sigma / self.dt)
-        _, self.heading_sm = st2p.utilities.cart2pol(x_h, y_h)
-
-    def _population_vector(self):
-        """Set ``pv_c``, ``rho``, ``phi`` and ``offset`` from ``dff`` and ``heading``.
-
-        ROIs are treated as evenly spaced unit vectors from -pi to pi, weighted by activity.
-        Works for (n_rois, T) data (1D outputs) and (n_channels, n_rois, T) data (2D outputs).
-        """
-        self.n_rois = self.dff.shape[-2]
-        roi_angle = np.linspace(-np.pi, np.pi, num=self.n_rois)[:, np.newaxis]
-
-        dff = self.dff[np.newaxis] if self.dff.ndim == 2 else self.dff
-        n_chan, n_time = dff.shape[0], dff.shape[-1]
-        pv_c = np.zeros((n_chan, n_time), dtype=complex)
-        rho = np.zeros((n_chan, n_time))
-        phi = np.zeros((n_chan, n_time))
-        offset = np.zeros((n_chan, n_time))
-
-        for chan in range(n_chan):
-            x_f, y_f = st2p.utilities.pol2cart(dff[chan], roi_angle)
-            x_mu, y_mu = x_f.mean(axis=0), y_f.mean(axis=0)
-            pv_c[chan] = x_mu + 1j * y_mu
-            rho[chan], phi[chan] = st2p.utilities.cart2pol(x_mu, y_mu)
-            _, offset[chan] = st2p.utilities.cart2pol(
-                *st2p.utilities.pol2cart(np.ones(self.heading.shape), phi[chan] - self.heading))
-
-        if self.dff.ndim == 2:
-            pv_c, rho, phi, offset = pv_c[0], rho[0], phi[0], offset[0]
-        self.pv_c, self.rho, self.phi, self.offset = pv_c, rho, phi, offset
-
-    def _heading_velocity(self, dh_sigma):
-        """Set ``dh``: derivative of the smoothed heading, optionally Gaussian smoothed.
-
-        Args:
-            dh_sigma: Gaussian width in seconds; no smoothing if 0.
-        """
-        dh = np.diff(np.unwrap(self.heading_sm)) / self.dt
-        self.dh = np.concatenate([[0], dh])
-        if dh_sigma > 0:
-            self.dh = sp.ndimage.gaussian_filter1d(self.dh, dh_sigma / self.dt)
-
-    def heading_aligned(self):
-        """Align neural activity to heading by rolling each timepoint to a canonical position.
-
-        Creates ``dff_h_aligned`` where each time point is rolled along the ROI axis so the
-        current heading bin lands on ROI ``HEADING_CENTER_ROI``, enabling averaging of
-        activity at each heading.
-        """
-        self.heading_bins = np.linspace(-np.pi, np.pi, num=self.n_rois + 1)
-        heading_dig = np.digitize(self.heading, self.heading_bins) - 1
-
-        # np.roll(x, s)[i] == x[(i - s) % n] with s = HEADING_CENTER_ROI - heading_dig
-        roi_idx = (np.arange(self.n_rois)[:, np.newaxis] + heading_dig[np.newaxis, :]
-                   - HEADING_CENTER_ROI) % self.n_rois
-        if self.dff.ndim == 2:
-            self.dff_h_aligned = np.take_along_axis(self.dff, roi_idx, axis=0)
-        else:
-            self.dff_h_aligned = np.take_along_axis(self.dff, roi_idx[np.newaxis], axis=1)
-
-    def calc_fwhm(self):
-        """Compute full-width at half-max (FWHM) of population tuning (see
-        :func:`ring_analysis.mean_profile_fwhm`); one value per channel if multi-channel."""
-        if self.dff.ndim > 2:  # if there are multiple channels
-            self.fwhm = [ring_analysis.mean_profile_fwhm(self.dff[i]) for i in range(self.dff.shape[0])]
-        else:
-            self.fwhm = ring_analysis.mean_profile_fwhm(self.dff)
+        heading_sm = _smooth_heading(heading, dt, h_sigma)
+        n_rois, pv_c, rho, phi, offset = _population_vector(dff, heading)
+        return cls(dff=dff, heading=heading, heading_sm=heading_sm,
+                   dh=_heading_velocity(heading_sm, dt, dh_sigma),
+                   offset=offset, phi=phi, rho=rho, pv_c=pv_c,
+                   dff_h_aligned=_align_to_heading(dff, heading),
+                   time=time, n_rois=n_rois, dt=dt, fwhm=_profile_widths(dff), **extra)
 
 
-class GetTS_DTE(_RingTimeseries):
-    """Extract and compute timeseries statistics from Dan Turner-Evans behavioral/neural data.
+@dataclass(frozen=True, eq=False, repr=False)
+class TrialTimeseries(RingTimeseries):
+    """Timeseries from Dan Turner-Evans' behavioral/neural data: EPG and EL channels.
 
-    Smooths dF/F for the EPG and EL channels, calculates circular statistics (heading offset,
-    population vector), and aligns neural activity to heading for each trial epoch.
-
-    Attributes:
+    Attributes (in addition to those of :class:`RingTimeseries`):
         trial_dict: Dict with behavioral data and neural timeseries by channel.
         channel_mapping: Dict mapping channel names ('EPG', 'EL') to trial_dict keys.
-        dff: Neural timeseries; shape (2, n_rois, n_timepoints), channel 0 = EPG, 1 = EL.
-        offset, phi, rho, pv_c, dff_h_aligned, fwhm: Per channel; see :class:`_RingTimeseries`.
+        dff: Shape (2, n_rois, n_timepoints), channel 0 = EPG, 1 = EL; the other per-channel
+            fields (offset, phi, rho, pv_c, dff_h_aligned, fwhm) follow the same order.
     """
 
-    def __init__(self, trial_dict, channel_mapping, **kwargs):
-        """
+    trial_dict: Any
+    channel_mapping: Any
+
+    @classmethod
+    def from_trial_dict(cls, trial_dict, channel_mapping, circ_sigma=.5, t_sigma=.1, h_sigma=.1,
+                        neural_shift=-.2, dh_sigma=0, closed=True):
+        """Smooth the EPG and EL activity of a trial and compute the circular statistics.
+
         Args:
             trial_dict: Dict with 'behavDat' (DataFrame) and neural timeseries arrays.
             channel_mapping: Dict mapping 'EPG' and 'EL' to keys of `trial_dict`.
-            **kwargs: Passed to ``get_ts``.
-        """
-        super().__init__()
-        self.trial_dict = trial_dict
-        self.channel_mapping = channel_mapping
-
-        self.get_ts(**kwargs)
-        self.heading_aligned()
-        self.calc_fwhm()
-
-    def get_ts(self, circ_sigma=.5, t_sigma=.1, h_sigma=.1, neural_shift=-.2, dh_sigma=0, closed=True):
-        """Extract and compute timeseries and circular statistics.
-
-        Args:
             circ_sigma: Gaussian smoothing width (in ROI bins) across neural population.
             t_sigma: Gaussian smoothing width (in seconds) along time axis.
             h_sigma: Gaussian smoothing width (in seconds) for heading.
@@ -185,69 +264,46 @@ class GetTS_DTE(_RingTimeseries):
             dh_sigma: Gaussian smoothing width for heading derivative.
             closed: If True, only use closed-loop behavior; else use all data.
         """
-        behav_data = self.trial_dict['behavDat']
+        behav_data = trial_dict['behavDat']
         mask = behav_data['closed'] == 1 if closed else np.ones(len(behav_data), dtype=bool)
 
-        self.time = behav_data['Elapsed time'].loc[mask]
+        time = behav_data['Elapsed time'].loc[mask]
+        dt = np.diff(time).mean()
+        heading = np.asarray(np.angle(np.exp(1j * (-np.pi / 180 * behav_data['Rotational offset'].loc[mask]))))
 
-        self.dt = np.diff(self.time).mean()
-        neural_shift_inds = int(neural_shift / self.dt)
+        dff = np.stack((trial_dict[channel_mapping['EPG']][mask, :].T,
+                        trial_dict[channel_mapping['EL']][mask, :].T), axis=0)
 
-        self.heading = np.angle(np.exp(1j * (-np.pi / 180 * behav_data['Rotational offset'].loc[mask])))
-        self._smooth_heading(h_sigma)
-
-        self.dff = np.stack((self.trial_dict[self.channel_mapping['EPG']][mask, :].T,
-                             self.trial_dict[self.channel_mapping['EL']][mask, :].T), axis=0)
-        if t_sigma > 0:
-            self.dff = sp.ndimage.gaussian_filter1d(self.dff, t_sigma / self.dt, axis=-1)
-        if circ_sigma > 0:
-            self.dff = sp.ndimage.gaussian_filter1d(self.dff, circ_sigma, axis=-2, mode='wrap')
-
-        self.dff = np.roll(self.dff, neural_shift_inds, axis=-1)
-
-        self._population_vector()
-        self._heading_velocity(dh_sigma)
+        return cls._from_arrays(dff=_smooth_activity(dff, dt, t_sigma, circ_sigma, neural_shift),
+                                heading=heading, time=time, dt=dt, h_sigma=h_sigma, dh_sigma=dh_sigma,
+                                trial_dict=trial_dict, channel_mapping=channel_mapping)
 
 
-class GetTS(_RingTimeseries):
-    """Extract and compute timeseries statistics from preprocessed imaging session.
+@dataclass(frozen=True, eq=False, repr=False)
+class SessionTimeseries(RingTimeseries):
+    """Timeseries from a preprocessed imaging session: (z-scored) dF/F of the ROIs plus the outer ring.
 
-    Computes (z-scored) dF/F for neural ROIs, calculates circular statistics (heading
-    offset, population vector), and aligns neural activity to heading.
-
-    Attributes:
+    Attributes (in addition to those of :class:`RingTimeseries`):
         pp: Preprocessed session object with voltage recordings and calcium imaging data.
         dff: Z-scored, smoothed dF/F; shape (n_rois, n_timepoints) or
             (n_channels, n_rois, n_timepoints) depending on the ``channels`` index.
         dff_noz: Same as ``dff`` but not z-scored and not smoothed.
         outer_ring: Z-scored, time-smoothed activity from the EB outer ring region.
         outer_ring_noz: Same as ``outer_ring`` but not z-scored.
-        heading, heading_sm, dh, offset, phi, rho, pv_c, dff_h_aligned, fwhm:
-            See :class:`_RingTimeseries`.
     """
 
-    def __init__(self, pp, **kwargs):
-        """Initialize session and compute timeseries and statistics.
+    pp: Any
+    dff_noz: np.ndarray
+    outer_ring: np.ndarray
+    outer_ring_noz: np.ndarray
+
+    @classmethod
+    def from_session(cls, pp, channels=-1, exp_detrend=True, background_ts='background',
+                     circ_sigma=.5, t_sigma=.1, h_sigma=.1, neural_shift=-.2, dh_sigma=0):
+        """Extract and smooth dF/F from a preprocessed session and compute the circular statistics.
 
         Args:
             pp: Preprocessed session object.
-            **kwargs: Passed to get_ts() method.
-        """
-        super().__init__()
-        self.pp = pp
-        self.dff_noz = None
-        self.outer_ring = None
-        self.outer_ring_noz = None
-
-        self.get_ts(**kwargs)
-        self.heading_aligned()
-        self.calc_fwhm()
-
-    def get_ts(self, channels=-1, exp_detrend=True, background_ts='background',
-               circ_sigma=.5, t_sigma=.1, h_sigma=.1, neural_shift=-.2, dh_sigma=0):
-        """Extract and compute timeseries and circular statistics from preprocessed session.
-
-        Args:
             channels: Index into the channel axis of the ROI timeseries; -1 selects the last
                 channel (default). Pass a list such as [0, 1] to keep several channels.
             exp_detrend: If True, exponential detrending is applied to dF/F.
@@ -258,37 +314,27 @@ class GetTS(_RingTimeseries):
             neural_shift: Time offset (in seconds) to align neural to behavior (typically negative).
             dh_sigma: Gaussian smoothing width for heading derivative.
         """
-        voltage = self.pp.voltage_recording_aligned
-        self.time = voltage['Time(ms)'] / 1000
-        self.time = self.time - self.time[0]
+        voltage = pp.voltage_recording_aligned
+        time = voltage['Time(ms)'] / 1000
+        time = time - time[0]
+        dt = np.diff(time).mean()
+        heading = np.angle(np.exp(1j * (-1 * voltage[' Heading'].to_numpy() - np.pi)))
 
-        self.dt = np.diff(self.time).mean()
-        neural_shift_inds = int(neural_shift / self.dt)
+        def zscored_F(roi_name, zscore):
+            return pp.calculate_zscored_F(roi_name, exp_detrend=exp_detrend, zscore=zscore,
+                                          background_ts=background_ts)
 
-        self.heading = np.angle(np.exp(1j * (-1 * voltage[' Heading'].to_numpy() - np.pi)))
-        self._smooth_heading(h_sigma)
+        def outer_ring_ts(zscore):
+            ts = np.squeeze(zscored_F('outer_ring', zscore))
+            return sp.ndimage.gaussian_filter1d(ts, t_sigma / dt, axis=-1) if t_sigma > 0 else ts
 
-        self.dff = self.pp.calculate_zscored_F('rois', exp_detrend=exp_detrend, zscore=True,
-                                               background_ts=background_ts)[channels, :, :]
-        self.dff_noz = self.pp.calculate_zscored_F('rois', exp_detrend=exp_detrend, zscore=False,
-                                                   background_ts=background_ts)[channels, :, :]
+        dff = zscored_F('rois', True)[channels, :, :]
+        return cls._from_arrays(dff=_smooth_activity(dff, dt, t_sigma, circ_sigma, neural_shift),
+                                heading=heading, time=time, dt=dt, h_sigma=h_sigma, dh_sigma=dh_sigma,
+                                pp=pp, dff_noz=zscored_F('rois', False)[channels, :, :],
+                                outer_ring=outer_ring_ts(True), outer_ring_noz=outer_ring_ts(False))
 
-        if t_sigma > 0:
-            self.dff = sp.ndimage.gaussian_filter1d(self.dff, t_sigma / self.dt, axis=-1)
-        if circ_sigma > 0:
-            self.dff = sp.ndimage.gaussian_filter1d(self.dff, circ_sigma, axis=-2, mode='wrap')
 
-        self.dff = np.roll(self.dff, neural_shift_inds, axis=-1)
-
-        self._population_vector()
-
-        self.outer_ring = self._outer_ring_ts('outer_ring', True, exp_detrend, background_ts, t_sigma)
-        self.outer_ring_noz = self._outer_ring_ts('outer_ring', False, exp_detrend, background_ts, t_sigma)
-
-        self._heading_velocity(dh_sigma)
-
-    def _outer_ring_ts(self, roi_name, zscore, exp_detrend, background_ts, t_sigma):
-        """dF/F of a single (non-ring) ROI group, squeezed and smoothed in time (if `t_sigma` > 0)."""
-        ts = np.squeeze(self.pp.calculate_zscored_F(roi_name, exp_detrend=exp_detrend, zscore=zscore,
-                                                    background_ts=background_ts))
-        return sp.ndimage.gaussian_filter1d(ts, t_sigma / self.dt) if t_sigma > 0 else ts
+# Historical names of the constructors (``GetTS(pp, ...)`` and ``GetTS_DTE(trial_dict, channel_mapping, ...)``)
+GetTS = SessionTimeseries.from_session
+GetTS_DTE = TrialTimeseries.from_trial_dict

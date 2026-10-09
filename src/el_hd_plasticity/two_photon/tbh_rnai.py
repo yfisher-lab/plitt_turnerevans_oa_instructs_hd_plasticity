@@ -11,9 +11,9 @@ from matplotlib import pyplot as plt
 from . import plotting, stats
 from .utilities import DEFAULT_OFFSET_BINS, DEFAULT_PLOT_TIMES
 
-# Output column -> session-table column for per-session statistics.
-OFFSET_META_COLS = {'fly_id': 'fly_id', 'cl': 'closed_loop', 'dark': 'dark', 'rnai': 'rnai'}
-BINNED_META_COLS = {'fly_id': 'fly_id', 'cl': 'closed_loop', 'rnai': 'rnai', 'dark': 'dark'}
+# Session-table columns copied into the per-session statistics.
+OFFSET_META_COLS = ('fly_id', 'closed_loop', 'dark', 'rnai')
+BINNED_META_COLS = ('fly_id', 'closed_loop', 'rnai', 'dark')
 # Per-session columns carried into regression tables.
 REG_META_COLS = ('fly_id', 'rnai', 'dark')
 
@@ -31,10 +31,10 @@ def offset_stats(sess_df, load_row, **kwargs):
     Args:
         sess_df: DataFrame with session metadata including fly_id, closed_loop, dark, rnai columns.
         load_row: Callable that loads preprocessed data for a session row.
-        **kwargs: Passed to :class:`session.GetTS`.
+        **kwargs: Passed to :meth:`session.SessionTimeseries.from_session`.
 
     Returns:
-        DataFrame with columns: fly_id, cl, dark, rnai, offset_var, offset_mean, offset_mag.
+        DataFrame with columns: fly_id, closed_loop, dark, rnai, offset_var, offset_mean, offset_mag.
     """
     return stats.offset_stats(sess_df, load_row, meta_cols=OFFSET_META_COLS, **kwargs)
 

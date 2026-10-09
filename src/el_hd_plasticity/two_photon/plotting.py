@@ -60,7 +60,7 @@ class Trace:
 
     @classmethod
     def from_ts(cls, label, ts, cmap='Greys', channel=None, hatch=None, color=None):
-        """Build a Trace from a :class:`~session.GetTS` object.
+        """Build a Trace from a :class:`~session.SessionTimeseries` object.
 
         Args:
             label: Name of the condition.

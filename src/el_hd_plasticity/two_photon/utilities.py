@@ -74,6 +74,16 @@ def heading_to_roi_coords(heading, n_rois=N_EB_ROIS):
     return (heading + np.pi) / (2 * np.pi) * (n_rois - 1)
 
 
+def heading_to_roi_index(heading, n_rois=N_EB_ROIS):
+    """Position of a heading on the ROI axis, in (fractional) ROI indices.
+
+    ROI ``j`` is centered at angle ``-pi + (j + 1/2) * 2pi / n_rois``, so heading ``h`` lies at ROI
+    index ``(h + pi) / 2pi * n_rois - 1/2``: an integer when the heading is at the center of an ROI,
+    and 7.5 (halfway between ROIs 7 and 8) for ``h = 0`` with 16 ROIs.
+    """
+    return (np.asarray(heading) + np.pi) / (2 * np.pi) * n_rois - 0.5
+
+
 def nearest_equivalent_angle(angle, reference):
     """Shift `angle` by a multiple of 2pi so that it lies as close as possible to `reference`.
 

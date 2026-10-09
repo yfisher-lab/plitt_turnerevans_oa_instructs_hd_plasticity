@@ -20,102 +20,121 @@ import scipy as sp
 from . import session
 from .utilities import binned_mean
 
-# Default mapping of output column -> session-table column for per-session statistics.
-BASIC_META_COLS = {'fly_id': 'fly_id', 'cl': 'closed_loop'}
+# Session-table columns copied into per-session statistics by default.
+BASIC_META_COLS = ('fly_id', 'closed_loop')
 
 
 def _meta(row, meta_cols):
-    """Pick the identifying columns of a session row, renamed as in `meta_cols`."""
-    return {out_name: row[src_name] for out_name, src_name in meta_cols.items()}
+    """Pick the identifying columns `meta_cols` of a session row (kept under their own names)."""
+    return {col: row[col] for col in meta_cols}
 
 
 # ----------------------------------------------------------------------------
 # Offset statistics
 # ----------------------------------------------------------------------------
 def offset_stats(sess_df, load_row, meta_cols=None, **ts_kwargs):
-    """Compute offset statistics (variance, mean, magnitude) for each session.
+    """Compute offset statistics (variance, mean, magnitude) for each session and channel.
 
     Computes circular statistics on the EPG offset (difference between heading and PVA)
-    for each imaging session.
+    for each imaging session. Sessions with several channels (``ts.offset_c`` of shape
+    (channels, time), e.g. ``channels=[0, 1]``) give one row per session per channel.
 
     Args:
         sess_df: Session DataFrame.
         load_row: Callable that loads preprocessed data for a session row.
-        meta_cols: Mapping of output column -> session-table column copied to the result.
-            Defaults to ``{'fly_id': 'fly_id', 'cl': 'closed_loop'}``.
-        **ts_kwargs: Passed to :class:`session.GetTS`.
+        meta_cols: Session-table columns copied to the result under the same names.
+            Defaults to ``('fly_id', 'closed_loop')``.
+        **ts_kwargs: Passed to :meth:`session.SessionTimeseries.from_session`.
 
     Returns:
-        DataFrame with the `meta_cols` plus offset_var, offset_mean, offset_mag.
+        DataFrame with the `meta_cols`, a ``channel`` column (only for multi-channel sessions;
+        the index along the first dimension of ``ts.offset_c``), and offset_var, offset_mean,
+        offset_mag.
     """
     meta_cols = BASIC_META_COLS if meta_cols is None else meta_cols
     rows = []
 
     for _, row in sess_df.iterrows():
         ts = session.GetTS(load_row(row), **ts_kwargs)
-        offset_c = ts.offset_c.mean()
+        multichannel = ts.offset_c.ndim > 1
+        offset_c = ts.offset_c if multichannel else ts.offset_c[np.newaxis]     # (channels, time)
+        offset = ts.offset if multichannel else ts.offset[np.newaxis]
 
-        rows.append({
-            **_meta(row, meta_cols),
-            'offset_var': sp.stats.circvar(ts.offset),
-            'offset_mean': np.angle(offset_c),
-            'offset_mag': np.abs(offset_c)
-        })
+        mean_c = offset_c.mean(axis=-1)
+        offset_var = sp.stats.circvar(offset, axis=-1)
+
+        for channel in range(offset_c.shape[0]):
+            rows.append({
+                **_meta(row, meta_cols),
+                **({'channel': channel} if multichannel else {}),
+                'offset_var': offset_var[channel],
+                'offset_mean': np.angle(mean_c[channel]),
+                'offset_mag': np.abs(mean_c[channel])
+            })
 
     return pd.DataFrame(rows)
+
+
+def _channel_groups(stats_df, fly_mask):
+    """Channels present for one fly (a single ``None`` when the table has no channel column)."""
+    return stats_df.loc[fly_mask, 'channel'].unique() if 'channel' in stats_df.columns else [None]
 
 
 def offset_stats_unique(stats_df, group_col=None, min_cl=1, dark_col='dark'):
     """Aggregate offset statistics per fly by averaging across sessions.
 
     Reduces multiple sessions per condition to single values by averaging, creating one
-    closed-loop row and one dark row per fly. Only flies with both closed-loop and dark
-    sessions are kept. Also adds ``offset_var_logit`` (logit of the mean variance) for
-    mixed effects modeling.
+    closed-loop row and one dark row per fly (and per channel, if `stats_df` has a ``channel``
+    column). Only flies with both closed-loop and dark sessions are kept. Also adds
+    ``offset_var_logit`` (logit of the mean variance) for mixed effects modeling.
 
     Args:
-        stats_df: Output from :func:`offset_stats`; needs fly_id, cl, offset_var, offset_mean,
-            offset_mag, and `dark_col` / `group_col` if given.
+        stats_df: Output from :func:`offset_stats`; needs fly_id, closed_loop, offset_var,
+            offset_mean, offset_mag, and `dark_col` / `group_col` if given.
         group_col: Optional column identifying the experimental group of each fly (e.g.
             'rnai', 'condition'); copied to the result.
-        min_cl: Sessions with ``cl >= min_cl`` count as closed loop. ``cl`` is the number of
-            closed-loop blocks preceding a session, so e.g. ``min_cl=2`` requires at least
-            10 min of prior closed-loop experience.
+        min_cl: Sessions with ``closed_loop >= min_cl`` count as closed loop.
+            ``closed_loop`` is the number of closed-loop blocks preceding a session, so e.g.
+            ``min_cl=2`` requires at least 10 min of prior closed-loop experience.
         dark_col: Column that is >= 1 for dark sessions. If None, dark sessions are those
-            with ``cl == 0``.
+            with ``closed_loop == 0``.
 
     Returns:
-        DataFrame with one row per condition per fly and columns fly_id, cl, [group_col], dark,
+        DataFrame with one row per condition per fly (per channel) and columns fly_id,
+        [channel], closed_loop (1 = closed-loop row, 0 = dark row), [group_col], dark,
         offset_var, offset_var_logit, offset_mean, offset_mag.
     """
     rows = []
 
     for fly in stats_df['fly_id'].unique():
         fly_mask = stats_df['fly_id'] == fly
-        cl_mask = fly_mask & (stats_df['cl'] >= min_cl)
-        if dark_col is None:
-            dark_mask = fly_mask & (stats_df['cl'] == 0)
-        else:
-            dark_mask = fly_mask & (stats_df[dark_col] >= 1)
-
-        # Only include flies with both conditions
-        if cl_mask.sum() < 1 or dark_mask.sum() < 1:
-            continue
-
         group = {} if group_col is None else {group_col: stats_df[group_col].loc[fly_mask].iloc[0]}
 
-        for cl, dark, mask in ((1, 0, cl_mask), (0, 1, dark_mask)):
-            var = stats_df['offset_var'].loc[mask].mean()
-            rows.append({
-                'fly_id': fly,
-                'cl': cl,
-                **group,
-                'dark': dark,
-                'offset_var': var,
-                'offset_var_logit': sp.special.logit(var),
-                'offset_mean': sp.stats.circmean(stats_df['offset_mean'].loc[mask]),
-                'offset_mag': stats_df['offset_mag'].loc[mask].mean()
-            })
+        for channel in _channel_groups(stats_df, fly_mask):
+            fly_ch = fly_mask if channel is None else fly_mask & (stats_df['channel'] == channel)
+            cl_mask = fly_ch & (stats_df['closed_loop'] >= min_cl)
+            if dark_col is None:
+                dark_mask = fly_ch & (stats_df['closed_loop'] == 0)
+            else:
+                dark_mask = fly_ch & (stats_df[dark_col] >= 1)
+
+            # Only include flies with both conditions
+            if cl_mask.sum() < 1 or dark_mask.sum() < 1:
+                continue
+
+            for cl, dark, mask in ((1, 0, cl_mask), (0, 1, dark_mask)):
+                var = stats_df['offset_var'].loc[mask].mean()
+                rows.append({
+                    'fly_id': fly,
+                    **({} if channel is None else {'channel': channel}),
+                    'closed_loop': cl,
+                    **group,
+                    'dark': dark,
+                    'offset_var': var,
+                    'offset_var_logit': sp.special.logit(var),
+                    'offset_mean': sp.stats.circmean(stats_df['offset_mean'].loc[mask]),
+                    'offset_mag': stats_df['offset_mag'].loc[mask].mean()
+                })
 
     return pd.DataFrame(rows)
 
@@ -131,25 +150,30 @@ def offset_stats_plot(stats_df_unique, group_col=None):
         group_col: Optional group column to carry over (see :func:`offset_stats_unique`).
 
     Returns:
-        DataFrame with one row per fly, columns for dark and cl values of each metric.
+        DataFrame with one row per fly (per channel, if present), columns for dark and
+        closed-loop values of each metric.
     """
     rows = []
 
     for fly in stats_df_unique['fly_id'].unique():
-        fly_data = stats_df_unique.loc[stats_df_unique['fly_id'] == fly]
+        fly_mask = stats_df_unique['fly_id'] == fly
+        for channel in _channel_groups(stats_df_unique, fly_mask):
+            fly_data = stats_df_unique.loc[fly_mask if channel is None
+                                           else fly_mask & (stats_df_unique['channel'] == channel)]
 
-        dark_data = fly_data.loc[fly_data['dark'] == 1].iloc[0]
-        cl_data = fly_data.loc[fly_data['dark'] == 0].iloc[0]
+            dark_data = fly_data.loc[fly_data['dark'] == 1].iloc[0]
+            cl_data = fly_data.loc[fly_data['dark'] == 0].iloc[0]
 
-        group = {} if group_col is None else {group_col: dark_data[group_col]}
-        rows.append({
-            'fly_id': fly,
-            **group,
-            'offset_var_dark': dark_data['offset_var'],
-            'offset_var_closed_loop': cl_data['offset_var'],
-            'offset_mag_dark': dark_data['offset_mag'],
-            'offset_mag_closed_loop': cl_data['offset_mag']
-        })
+            group = {} if group_col is None else {group_col: dark_data[group_col]}
+            rows.append({
+                'fly_id': fly,
+                **({} if channel is None else {'channel': channel}),
+                **group,
+                'offset_var_dark': dark_data['offset_var'],
+                'offset_var_closed_loop': cl_data['offset_var'],
+                'offset_mag_dark': dark_data['offset_mag'],
+                'offset_mag_closed_loop': cl_data['offset_mag']
+            })
 
     return pd.DataFrame(rows)
 
@@ -164,10 +188,10 @@ def rho_stats(sess_df, load_row, dh_bins, meta_cols=None, outer_ring=False, **ts
         sess_df: Session DataFrame.
         load_row: Callable to load preprocessed data.
         dh_bins: Bin edges for absolute heading velocity.
-        meta_cols: Mapping of output column -> session-table column copied to the result.
-            Defaults to ``{'fly_id': 'fly_id', 'cl': 'closed_loop'}``.
+        meta_cols: Session-table columns copied to the result under the same names.
+            Defaults to ``('fly_id', 'closed_loop')``.
         outer_ring: If True, also average the outer ring fluorescence in each bin (``F_dig``).
-        **ts_kwargs: Passed to :class:`session.GetTS`.
+        **ts_kwargs: Passed to :meth:`session.SessionTimeseries.from_session`.
 
     Returns:
         DataFrame with the `meta_cols` plus ``rho_dig`` (and ``F_dig``): arrays holding the mean
@@ -189,17 +213,18 @@ def rho_stats(sess_df, load_row, dh_bins, meta_cols=None, outer_ring=False, **ts
     return pd.DataFrame(rows)
 
 
-def group_rho_stats(rho_stats):
+def group_rho_stats(rho_stats, group_cols=('fly_id', 'closed_loop')):
     """Average binned rho / outer-ring fluorescence over the sessions of each fly and condition.
 
     Args:
-        rho_stats: Output of :func:`rho_stats` with ``outer_ring=True`` and a ``cl`` column.
+        rho_stats: Output of :func:`rho_stats` with ``outer_ring=True``.
+        group_cols: Columns of `rho_stats` defining a fly and condition.
 
     Returns:
-        DataFrame with one row per (fly_id, cl) holding the NaN-aware mean ``F_dig`` and
-        ``rho_dig`` arrays.
+        DataFrame with one row per group holding the NaN-aware mean ``F_dig`` and ``rho_dig``
+        arrays.
     """
-    return rho_stats.groupby(['fly_id', 'cl']).apply(
+    return rho_stats.groupby(list(group_cols)).apply(
         lambda x: pd.Series({
             'F_dig': np.nanmean(np.stack(x['F_dig']), axis=0),
             'rho_dig': np.nanmean(np.stack(x['rho_dig']), axis=0)
@@ -216,9 +241,9 @@ def dphi_stats(sess_df, load_row, dh_bins, meta_cols=None, **ts_kwargs):
         sess_df: Session DataFrame.
         load_row: Callable to load preprocessed data.
         dh_bins: Bin edges for heading velocity.
-        meta_cols: Mapping of output column -> session-table column copied to the result.
-            Defaults to ``{'fly_id': 'fly_id', 'cl': 'closed_loop'}``.
-        **ts_kwargs: Passed to :class:`session.GetTS` (default ``t_sigma=.1, h_sigma=.1``).
+        meta_cols: Session-table columns copied to the result under the same names.
+            Defaults to ``('fly_id', 'closed_loop')``.
+        **ts_kwargs: Passed to :meth:`session.SessionTimeseries.from_session` (default ``t_sigma=.1, h_sigma=.1``).
 
     Returns:
         DataFrame with the `meta_cols` plus ``dh_dig`` (bin index of each time point) and

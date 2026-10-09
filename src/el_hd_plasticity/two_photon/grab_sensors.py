@@ -1,10 +1,10 @@
 """Analysis and figures for GRAB sensor (e.g. GRAB-DA, GRAB-OA) imaging data.
 
-Sessions are managed with :class:`~loading.SessMaker` (re-exported here). Besides the
+Sessions are managed with :class:`~loading.SessionManager`. Besides the
 EPG offset statistics shared with the other experiments (see :mod:`stats`), these sessions are
 analysed for outer-ring sensor fluorescence versus rotation speed.
 
-Figures take ``ts_dict``: a dict with a ``'fly'`` name and one :class:`session.GetTS` per
+Figures take ``ts_dict``: a dict with a ``'fly'`` name and one :class:`session.SessionTimeseries` per
 condition key (e.g. ``'closed loop'``).
 """
 
@@ -13,7 +13,6 @@ from matplotlib import gridspec
 from matplotlib import pyplot as plt
 
 from . import plotting, session, stats, utilities
-from .loading import SessMaker  # noqa: F401  (re-exported; historically defined here)
 from .utilities import DEFAULT_OFFSET_BINS, DEFAULT_PLOT_TIMES
 
 
@@ -24,10 +23,10 @@ def offset_stats(sess_cls):
     for each imaging session.
 
     Args:
-        sess_cls: SessMaker instance providing session metadata and data access.
+        sess_cls: SessionManager providing session metadata and data access.
 
     Returns:
-        DataFrame with columns: fly_id, cl, offset_var, offset_mean, offset_mag.
+        DataFrame with columns: fly_id, closed_loop, offset_var, offset_mean, offset_mag.
     """
     return stats.offset_stats(sess_cls.sess_df, sess_cls.load_row)
 
@@ -36,7 +35,7 @@ def offset_stats_unique(stats_df):
     """Aggregate offset statistics per fly by averaging across sessions.
 
     Reduces multiple sessions per condition to single values by averaging, creating
-    one row per condition per fly (closed loop: ``cl >= 1``, dark: ``cl == 0``). Requires
+    one row per condition per fly (closed loop: ``closed_loop >= 1``, dark: ``closed_loop == 0``). Requires
     flies to have both closed-loop and dark data. Applies logit transform for mixed effects
     modeling.
 
@@ -68,9 +67,9 @@ def rho_stats(sess_cls, dh_bins, dataframe=False, load_row=None):
     fluorescence for each bin of absolute heading velocity.
 
     Args:
-        sess_cls: SessMaker instance or DataFrame with session data.
+        sess_cls: SessionManager or DataFrame with session data.
         dh_bins: Bin edges for heading velocity.
-        dataframe: If True, sess_cls is a DataFrame; if False, it's a SessMaker.
+        dataframe: If True, sess_cls is a DataFrame; if False, it's a SessionManager.
         load_row: Callable to load data (required if dataframe=True).
 
     Returns:
@@ -96,13 +95,13 @@ def reformat_rho_stats_for_reg(grouped_stats, dh_bins):
 
     Returns:
         Long-format DataFrame with one row per bin per session (NaN values excluded) and columns
-        fly_id, cl, rho, log_rho, dh, F, log_F.
+        fly_id, closed_loop, rho, log_rho, dh, F, log_F.
     """
     df = stats.reformat_binned_stats_for_reg(grouped_stats, dh_bins, {'rho': 'rho_dig', 'F': 'F_dig'},
-                                             meta_cols=('fly_id', 'cl'))
+                                             meta_cols=('fly_id', 'closed_loop'))
     df['log_rho'] = np.log(df['rho'])
     df['log_F'] = np.log(df['F'])
-    return df[['fly_id', 'cl', 'rho', 'log_rho', 'dh', 'F', 'log_F']]
+    return df[['fly_id', 'closed_loop', 'rho', 'log_rho', 'dh', 'F', 'log_F']]
 
 
 def align_peaks_split_halves(sess_cls, rot_speed_mask=True, min_rot_speed=.5):
@@ -114,7 +113,7 @@ def align_peaks_split_halves(sess_cls, rot_speed_mask=True, min_rot_speed=.5):
     the peak location is stable within a session.
 
     Args:
-        sess_cls: SessMaker instance providing session metadata and data access.
+        sess_cls: SessionManager providing session metadata and data access.
         rot_speed_mask: If True, only use time points with rotation speed above `min_rot_speed`.
         min_rot_speed: Rotation speed threshold (rad/s).
 

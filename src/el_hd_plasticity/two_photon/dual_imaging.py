@@ -25,7 +25,7 @@ CH_COLORS = ('Greys', 'Greens')  # default colormaps for (EPG, EL)
 # Offset statistics
 # ----------------------------------------------------------------------------
 def _offset_stats_row(ts):
-    """Per-session two-channel offset statistics for a :class:`session.GetTS`-like object."""
+    """Per-session two-channel offset statistics for a :class:`session.SessionTimeseries`-like object."""
     mean_offsets = np.angle(ts.offset_c.mean(axis=-1))
     offset_var = sp.stats.circvar(ts.offset, axis=-1)
     offset_diff = wrap_angle(ts.offset[0, :] - ts.offset[1, :])
@@ -49,7 +49,7 @@ def offset_stats_DTE(data, channel_lookup):
 
     Args:
         data: Dict mapping fly path -> dict of trial name -> trial dict.
-        channel_lookup: Dict mapping fly path -> channel mapping for :class:`session.GetTS_DTE`.
+        channel_lookup: Dict mapping fly path -> channel mapping for :meth:`session.TrialTimeseries.from_trial_dict`.
 
     Returns:
         DataFrame with fly_id, cl (always 1) and the two-channel offset statistics.
@@ -271,7 +271,7 @@ def plot_sess_heatmaps(ts, fly_id, sess_name, vmin=-.5, vmax=.5, plot_times=DEFA
     """Heatmaps of each channel (raw and heading-aligned) plus the PVA of both channels and their difference.
 
     Args:
-        ts: Two-channel :class:`session.GetTS`.
+        ts: Two-channel :class:`session.SessionTimeseries`.
         fly_id: Fly identifier for the title.
         sess_name: Session name for the title.
         vmin: Minimum value for heatmap colorscale.
@@ -329,7 +329,7 @@ def plot_pva_diff_histograms(ts, fly_id, sess_name,
     """Histogram of the PVA difference between the two channels.
 
     Args:
-        ts: Two-channel :class:`session.GetTS`.
+        ts: Two-channel :class:`session.SessionTimeseries`.
         fly_id: Fly identifier for the title.
         sess_name: Session name for the title.
         bins: Bins for the histogram.
@@ -360,7 +360,7 @@ def plot_sess_histograms(ts, fly_id, sess_name, bins=DEFAULT_OFFSET_BINS,
     """Offset histograms and polar mean-vector plots for both channels.
 
     Args:
-        ts: Two-channel :class:`session.GetTS`.
+        ts: Two-channel :class:`session.SessionTimeseries`.
         fly_id: Fly identifier for the title.
         sess_name: Session name for the title.
         bins: Bins for the histogram.
@@ -378,7 +378,7 @@ def plot_transpose_heatmaps(ts, fly_id, sess_name, vmin=-.5, vmax=.5, plot_times
     """Transposed (time down, ROIs across) heatmaps of both channels, their PVAs and PVA difference.
 
     Args:
-        ts: Two-channel :class:`session.GetTS`.
+        ts: Two-channel :class:`session.SessionTimeseries`.
         fly_id: Fly identifier for the title.
         sess_name: Session name for the title.
         vmin: Minimum value for heatmap colorscale.
@@ -433,7 +433,7 @@ def plot_sess_heatmaps_w_hist(ts, fly_id, sess_name, vmin=-.5, vmax=3, plot_time
     """EPG and EL heatmaps, each with its offset distribution (titled with the offset variance).
 
     Args:
-        ts: Two-channel :class:`session.GetTS`.
+        ts: Two-channel :class:`session.SessionTimeseries`.
         fly_id: Fly identifier for the title.
         sess_name: Session name for the title.
         vmin: Minimum value for heatmap colorscale.

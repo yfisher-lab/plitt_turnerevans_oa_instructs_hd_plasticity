@@ -27,6 +27,13 @@ def test_heading_to_roi_coords_endpoints_and_center():
     np.testing.assert_allclose(u.heading_to_roi_coords(np.array([-np.pi, 0, np.pi])), [0, 7.5, 15])
 
 
+def test_heading_to_roi_index_is_centered_on_roi_centers():
+    n = 16
+    centers = -np.pi + (np.arange(n) + .5) * 2 * np.pi / n
+    np.testing.assert_allclose(u.heading_to_roi_index(centers, n), np.arange(n), atol=1e-12)
+    assert u.heading_to_roi_index(0.0, n) == 7.5
+
+
 def test_nearest_equivalent_angle_unwraps_toward_reference():
     assert np.isclose(u.nearest_equivalent_angle(3.0, -3.0), 3.0 - 2 * np.pi)
     assert u.nearest_equivalent_angle(0.5, 0.0) == 0.5

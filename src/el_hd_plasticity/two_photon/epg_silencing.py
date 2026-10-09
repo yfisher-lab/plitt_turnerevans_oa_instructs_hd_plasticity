@@ -2,8 +2,8 @@
 
 from . import stats
 
-# Output column -> session-table column
-META_COLS = {'fly_id': 'fly_id', 'scan_type': 'scan_type', 'condition': 'condition'}
+# Session-table columns copied into the result
+META_COLS = ('fly_id', 'scan_type', 'condition')
 
 
 def rho_stats(sess_df, load_row, dh_bins):

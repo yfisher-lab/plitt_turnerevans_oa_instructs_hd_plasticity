@@ -7,7 +7,7 @@ table has one row per scan with its ``scan_type``; per-scan offset summaries ('m
 'mean vec. len', 'offset var.') are averaged per fly with :func:`build_sum_stats` and compared
 with :func:`avg_diff` (remapping error) and the figure helpers below.
 
-Figures take ``ts_dict``: a dict with a ``'fly'`` name and :class:`session.GetTS` objects for
+Figures take ``ts_dict``: a dict with a ``'fly'`` name and :class:`session.SessionTimeseries` objects for
 ``'baseline'``, ``'post_0deg'`` and ``'post_180deg'``.
 """
 
