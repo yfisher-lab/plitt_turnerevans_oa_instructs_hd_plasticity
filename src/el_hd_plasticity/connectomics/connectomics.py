@@ -1,23 +1,27 @@
+"""Hemibrain connectome helpers: neuPrint client and the ellipsoid body (EB) coordinate system.
+
+:class:`EBCoordinateSystem` re-expresses hemibrain coordinates in a frame aligned to the EB
+(principal axes of the EB mesh) and provides ring-phase / radius / cross-section coordinates plus
+normalized versions of them, so synapse and skeleton positions can be compared across the ring.
+"""
+
+import navis.interfaces.neuprint as neu
+import neuprint as npt
 import numpy as np
 import scipy as sp
 from sklearn.decomposition import PCA
 
 from . import params
 
-import neuprint as npt
 
-import navis
-import navis.interfaces.neuprint as neu
+def npt_client(webpage='neuprint.janelia.org', dataset=params.NPT_DATASET, token=params.NPT_TOKEN):
+    """Create a neuPrint client (also registers it as the default client for neuprint/navis calls).
 
-def npt_client(webpage='neuprint.janelia.org', dataset='hemibrain:v1.2.1', token=params.NPT_TOKEN):
-    """
-    Create a neuprint client object with the specified parameters.
-    
     Args:
         webpage (str): The URL of the neuprint server.
         dataset (str): The name of the dataset to use.
         token (str): The authentication token for the neuprint server.
-        
+
     Returns:
         npt.Client: A neuprint client object.
     """
@@ -25,7 +29,7 @@ def npt_client(webpage='neuprint.janelia.org', dataset='hemibrain:v1.2.1', token
 
 
 
-class EBCoordinateSystem():
+class EBCoordinateSystem:
     """Manage coordinate system transformations for the ellipsoid body (EB) in the Drosophila brain.
     
     Provides methods to convert between different coordinate systems (Cartesian, polar/cylindrical)
@@ -33,6 +37,8 @@ class EBCoordinateSystem():
     """
 
     def __init__(self):
+        """Fetch the EB mesh from neuPrint (needs a registered client, see :func:`npt_client`) and build
+        the coordinate transforms and radius scalers."""
 
         self.orig_eb_mesh = neu.fetch_roi("EB")
         self.orig_origin = self.orig_eb_mesh.vertices.mean(axis=0)
@@ -244,4 +250,75 @@ class EBCoordinateSystem():
                                                         self.eb_vertices_xsec['radius']
                                                         )
 
+    def skeleton_to_eb_coords(self, navis_skeleton):
+        """Express a navis skeleton's node coordinates in the EB basis (y and z flipped).
 
+        The flips match :func:`add_eb_coords` so skeletons and synapses share one frame.
+
+        Args:
+            navis_skeleton: navis NeuronList holding one skeleton in Neuprint coordinates, as
+                returned by ``navis.interfaces.neuprint.fetch_skeletons``.
+
+        Returns:
+            The same NeuronList, with its node table replaced by one in EB coordinates (float32).
+        """
+        nodes = navis_skeleton.nodes.copy()
+        nodes.loc[:, ['x', 'y', 'z']] = self.change_of_basis(nodes.loc[:, ['x', 'y', 'z']].values).astype(np.float32)
+        nodes.loc[:, 'y'] = -nodes.loc[:, 'y']  # flip y axis to match EB coordinates
+        nodes.loc[:, 'z'] = -nodes.loc[:, 'z']
+        navis_skeleton.set_neuron_attributes(nodes, name='nodes')
+        return navis_skeleton
+
+
+def add_eb_coords(syn_df, ebcoords, type='post'):
+    """Add EB-frame coordinates of synapses to a synapse table, in place.
+
+    Adds columns x_eb, y_eb, z_eb (EB basis, y and z flipped), phase, radius, radius_scaled
+    (ring coordinates), xsec_phase, xsec_radius, xsec_radius_scaled (cross-section polar
+    coordinates) and xsec_x/xsec_y (+ ``_scaled`` versions) in Cartesian form.
+
+    Args:
+        syn_df: DataFrame from ``neuprint.fetch_synapse_connections`` with columns
+            x_pre/y_pre/z_pre and x_post/y_post/z_post.
+        ebcoords: :class:`EBCoordinateSystem`.
+        type: Which side of the synapse to locate, 'pre' or 'post'.
+
+    Returns:
+        `syn_df` (modified in place).
+    """
+    syn_df.loc[:, ['x_eb', 'y_eb', 'z_eb']] = ebcoords.change_of_basis(
+        syn_df.loc[:, [f'x_{type}', f'y_{type}', f'z_{type}']].values)
+    syn_df.loc[:, ['y_eb', 'z_eb']] = -1 * syn_df.loc[:, ['y_eb', 'z_eb']]
+    phase, radius = ebcoords.get_circ_coordinates(syn_df.loc[:, ['x_eb', 'y_eb', 'z_eb']].values)
+    syn_df['phase'], syn_df['radius'] = phase, radius
+    syn_df['radius_scaled'] = ebcoords.scale_radius(syn_df['phase'], syn_df['radius'])
+    syn_df['xsec_phase'], syn_df['xsec_radius'] = ebcoords.get_xsec_coords(syn_df['phase'], syn_df['radius'], syn_df['z_eb'])
+    syn_df['xsec_radius_scaled'] = ebcoords.scale_xsec_rad(syn_df['phase'],
+                                                           syn_df['xsec_phase'],
+                                                           syn_df['xsec_radius'])
+
+    syn_df['xsec_x'] = syn_df['xsec_radius'] * np.cos(syn_df['xsec_phase'])
+    syn_df['xsec_y'] = syn_df['xsec_radius'] * np.sin(syn_df['xsec_phase'])
+    syn_df['xsec_x_scaled'] = syn_df['xsec_radius_scaled'] * np.cos(syn_df['xsec_phase'])
+    syn_df['xsec_y_scaled'] = syn_df['xsec_radius_scaled'] * np.sin(syn_df['xsec_phase'])
+    return syn_df
+
+
+def peeled_convex_hull(syn_points, n=20):
+    """Convex hull of a point cloud after peeling off the outermost hull `n` times.
+
+    Repeatedly removes the points on the convex hull, which makes the final hull robust to a
+    few outlying synapses.
+
+    Args:
+        syn_points: (N, 2) array of point coordinates.
+        n: Number of times to peel off the convex hull.
+
+    Returns:
+        (M, 2) array with the vertices of the convex hull of the remaining points.
+    """
+    syn_points = syn_points.copy()
+    for _ in range(n):
+        syn_hull = sp.spatial.ConvexHull(syn_points)
+        syn_points = np.delete(syn_points, syn_hull.vertices, axis=0)
+    return syn_points[sp.spatial.ConvexHull(syn_points).vertices, :]

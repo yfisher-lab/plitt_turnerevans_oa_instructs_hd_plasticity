@@ -15,6 +15,8 @@ dependencies = [
     "scipy",
     "pandas",
     "matplotlib",
+    "seaborn",
+    "networkx",
     "scikit-learn",
     "navis",
     "neuprint-python",
@@ -28,7 +30,6 @@ dependencies = [
     "imageio[ffmpeg]",
     "sessiontools @ git+https://github.com/yfisher-lab/SessionTools.git",
     "napari[all]",
-    "pyqt",
 ]
 
 [project.optional-dependencies]
@@ -36,7 +37,22 @@ dev = [
     "pytest",
     "black",
     "flake8",
+    "ruff",
 ]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+# pycodestyle errors (no line-length rule), pyflakes, import sorting, bugbear, pyupgrade,
+# simplifications, and sorted __all__
+select = ["E4", "E7", "E9", "F", "I", "B", "UP", "SIM", "RUF022"]
+# SIM108 (prefer ternaries) makes several long conditionals harder to read
+ignore = ["SIM108"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

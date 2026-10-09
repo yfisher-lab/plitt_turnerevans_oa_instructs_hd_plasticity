@@ -1,14 +1,17 @@
 """Helper utilities for RNA-Seq plotting.
 
-This module contains helper functions moved out of the notebook so they can be
-reused and tested more easily. Function names use snake_case (PEP8).
+Helper functions moved out of the RNA-Seq notebooks so they can be reused and tested more easily:
+selecting and CPM-normalizing samples from a count table (:func:`get_sub_dat`), plotting gene
+heatmaps (:func:`plt_ht_map`) and attaching gene names to differential expression results
+(:func:`names_for_genes_pvals`). Function names use snake_case (PEP8).
 """
-from typing import Optional
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
+
+__all__ = ['get_sub_dat', 'names_for_genes_pvals', 'plt_ht_map']
 
 
 def get_sub_dat(cells_meta: pd.DataFrame, cells_count: pd.DataFrame, name: str, norm: bool = True) -> pd.DataFrame:
@@ -46,7 +49,7 @@ def get_sub_dat(cells_meta: pd.DataFrame, cells_count: pd.DataFrame, name: str, 
         get_dat = get_dat.multiply(1e6 / col_sums, axis=1)
 
     # Re-label columns to include the sample name and qp id
-    new_cols = [f"{sname}-{qp}" for sname, qp in zip(samp_ids['sample'].values, samp_ids['qp_well_fq'].values)]
+    new_cols = [f"{sname}-{qp}" for sname, qp in zip(samp_ids['sample'].values, samp_ids['qp_well_fq'].values, strict=False)]
     # If number of cols mismatch (defensive), keep original names
     if len(new_cols) == len(get_dat.columns):
         get_dat.columns = new_cols
@@ -56,7 +59,7 @@ def get_sub_dat(cells_meta: pd.DataFrame, cells_count: pd.DataFrame, name: str, 
 
 
 def plt_ht_map(genes: pd.DataFrame, counts: pd.DataFrame, c_label: str, max_cts: float,
-               figsize: Optional[tuple] = None, cmap: str = 'viridis', cbar_shrink: float = 0.5):
+               figsize: tuple | None = None, cmap: str = 'viridis', cbar_shrink: float = 0.5):
     """Plot a heatmap of selected genes across provided count table.
 
     Args:

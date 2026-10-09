@@ -1,516 +1,452 @@
-import pathlib
+"""Analysis and figures for dual-channel (EPG + EL) co-imaging sessions.
+
+Sessions have two imaging channels (channel 0 = EPG, channel 1 = EL), so timeseries objects
+carry per-channel ``dff``, ``phi``, ``rho`` and ``offset``. Statistics compare the two channels
+(offset difference, PVA difference, widths) in closed loop and in the dark.
+
+Two data sources are supported: preprocessed sessions listed in a session table (functions
+taking ``sess_df`` and ``load_row``) and Dan Turner-Evans' trial dictionaries (``*_DTE``
+functions).
+"""
+
 import numpy as np
-import scipy as sp
 import pandas as pd
+import scipy as sp
 from matplotlib import pyplot as plt
-
 from matplotlib.gridspec import GridSpec as GS
-from matplotlib.ticker import (MultipleLocator, AutoMinorLocator)
+
+from . import plotting, session, utilities
+from .utilities import DEFAULT_OFFSET_BINS, DEFAULT_PLOT_TIMES, binned_mean, wrap_angle
+
+CH_COLORS = ('Greys', 'Greens')  # default colormaps for (EPG, EL)
 
 
-import SessionTools.two_photon as st2p
-from . import session, utilities
+# ----------------------------------------------------------------------------
+# Offset statistics
+# ----------------------------------------------------------------------------
+def _offset_stats_row(ts):
+    """Per-session two-channel offset statistics for a :class:`session.GetTS`-like object."""
+    mean_offsets = np.angle(ts.offset_c.mean(axis=-1))
+    offset_var = sp.stats.circvar(ts.offset, axis=-1)
+    offset_diff = wrap_angle(ts.offset[0, :] - ts.offset[1, :])
+    pva_diff = np.abs(wrap_angle(np.diff(ts.phi, axis=0))).mean()
+
+    return {
+        'offset_ch1': mean_offsets[0],
+        'offset_ch2': mean_offsets[1],
+        'offset_var_ch1': offset_var[0],
+        'offset_var_ch2': offset_var[1],
+        'offset_diff': sp.stats.circmean(offset_diff),
+        'abs_offset_diff': sp.stats.circmean(np.abs(offset_diff)),
+        'pva_diff': pva_diff,
+        'fwhm_ch1': ts.fwhm[0],
+        'fwhm_ch2': ts.fwhm[1]
+    }
 
 
 def offset_stats_DTE(data, channel_lookup):
-    """Compute offset statistics from DTE data."""
+    """Compute offset statistics for each trial of the DTE dataset.
+
+    Args:
+        data: Dict mapping fly path -> dict of trial name -> trial dict.
+        channel_lookup: Dict mapping fly path -> channel mapping for :class:`session.GetTS_DTE`.
+
+    Returns:
+        DataFrame with fly_id, cl (always 1) and the two-channel offset statistics.
+    """
     rows = []
-    
+
     for fly, multitrial_dict in data.items():
         flyname = fly.split("\\")[-1]
-        for trial_name, trial_dict in multitrial_dict.items():
+        for trial_dict in multitrial_dict.values():
             ts = session.GetTS_DTE(trial_dict, channel_lookup[fly], dh_sigma=.3)
-
-            mean_offsets = np.angle(ts.offset_c.mean(axis=-1))
-            offset_var = sp.stats.circvar(ts.offset, axis=-1)
-            offset_diff = np.angle(np.exp(1j*(ts.offset[0,:]-ts.offset[1,:])))
-            pva_diff = np.abs(np.angle(np.exp(1j*np.diff(ts.phi, axis=0)))).mean()
-            
-            rows.append({
-                'fly_id': flyname,
-                'cl': 1,
-                'offset_ch1': mean_offsets[0],
-                'offset_ch2': mean_offsets[1],
-                'offset_var_ch1': offset_var[0],
-                'offset_var_ch2': offset_var[1],
-                'offset_diff': sp.stats.circmean(offset_diff),
-                'abs_offset_diff': sp.stats.circmean(np.abs(offset_diff)),
-                'pva_diff': pva_diff,
-                'fwhm_ch1': ts.fwhm[0],
-                'fwhm_ch2': ts.fwhm[1]
-            })
+            rows.append({'fly_id': flyname, 'cl': 1, **_offset_stats_row(ts)})
 
     return pd.DataFrame(rows)
+
 
 def offset_stats(sess_df, load_row):
-    """Compute offset statistics from session dataframe."""
+    """Compute two-channel offset statistics for each session.
+
+    Args:
+        sess_df: Session DataFrame with fly_id and closed_loop columns.
+        load_row: Callable to load preprocessed data.
+
+    Returns:
+        DataFrame with fly_id, cl and the two-channel offset statistics.
+    """
     rows = []
-     
+
     for _, row in sess_df.iterrows():
-        ts = session.GetTS(load_row(row), channels=[0,1])
-
-        mean_offsets = np.angle(ts.offset_c.mean(axis=-1))
-        offset_var = sp.stats.circvar(ts.offset, axis=-1)
-        offset_diff = np.angle(np.exp(1j*(ts.offset[0,:]-ts.offset[1,:])))
-        pva_diff = np.abs(np.angle(np.exp(1j*np.diff(ts.phi, axis=0)))).mean()
-
-        rows.append({
-            'fly_id': row['fly_id'],
-            'cl': row['closed_loop'],
-            'offset_ch1': mean_offsets[0],
-            'offset_ch2': mean_offsets[1],
-            'offset_var_ch1': offset_var[0],
-            'offset_var_ch2': offset_var[1],
-            'offset_diff': sp.stats.circmean(offset_diff),
-            'abs_offset_diff': sp.stats.circmean(np.abs(offset_diff)),
-            'pva_diff': pva_diff,
-            'fwhm_ch1': ts.fwhm[0],
-            'fwhm_ch2': ts.fwhm[1]
-        })
+        ts = session.GetTS(load_row(row), channels=[0, 1])
+        rows.append({'fly_id': row['fly_id'], 'cl': row['closed_loop'], **_offset_stats_row(ts)})
 
     return pd.DataFrame(rows)
 
+
+def _aggregate_sessions(stats_df, mask, fly, cl, offset_diff_agg):
+    """Average two-channel offset statistics over the sessions selected by `mask`."""
+    sub = stats_df.loc[mask]
+    return {
+        'fly_id': fly,
+        'cl': cl,
+        'offset_ch1': sp.stats.circmean(sub['offset_ch1']),
+        'offset_ch2': sp.stats.circmean(sub['offset_ch2']),
+        'offset_var_ch1': sub['offset_var_ch1'].mean(),
+        'offset_var_ch2': sub['offset_var_ch2'].mean(),
+        'offset_diff': offset_diff_agg(sub['offset_diff']),
+        'abs_offset_diff': sub['abs_offset_diff'].mean(),
+        'pva_diff': sub['pva_diff'].mean(),
+        'fwhm_ch1': sub['fwhm_ch1'].mean(),
+        'fwhm_ch2': sub['fwhm_ch2'].mean()
+    }
+
+
 def offset_stats_unique(stats_df, cl_only=False):
-    """Aggregate offset statistics per fly, comparing closed loop and dark conditions."""
+    """Aggregate offset statistics per fly, comparing closed loop and dark conditions.
+
+    Args:
+        stats_df: Output from :func:`offset_stats` or :func:`offset_stats_DTE`.
+        cl_only: If True, keep flies that have closed-loop sessions even without dark sessions
+            (no dark row is produced for them); otherwise require both.
+
+    Returns:
+        DataFrame with one closed-loop (cl=1) and, if available, one dark (cl=0) row per fly.
+    """
+    # NOTE: the closed-loop row wraps the mean offset difference to (-pi, pi] whereas the dark row
+    # uses scipy's circmean convention [0, 2pi). The conventions are kept as they were when the
+    # published numbers were generated.
+    def cl_diff_agg(offset_diff):
+        """Circular mean of the offset difference, wrapped to (-pi, pi]."""
+        return np.angle(np.exp(1j * offset_diff).mean())
+
     rows = []
-    
+
     for fly in stats_df['fly_id'].unique():
-        cl_mask = (stats_df['fly_id']==fly)*(stats_df['cl']>=1)
-        dark_mask = (stats_df['fly_id']==fly)*(stats_df['cl']==0) 
+        fly_mask = stats_df['fly_id'] == fly
+        cl_mask = fly_mask & (stats_df['cl'] >= 1)
+        dark_mask = fly_mask & (stats_df['cl'] == 0)
 
         has_cl = cl_mask.sum() > 0
         has_dark = dark_mask.sum() > 0
-        
-        if cl_only:
-            should_include = has_cl
-        else:
-            should_include = has_cl and has_dark
-            
-        if should_include:
-            # Closed loop row
-            rows.append({
-                'fly_id': fly,
-                'cl': 1,
-                'offset_ch1': sp.stats.circmean(stats_df.loc[cl_mask, 'offset_ch1']),
-                'offset_ch2': sp.stats.circmean(stats_df.loc[cl_mask, 'offset_ch2']),
-                'offset_var_ch1': stats_df.loc[cl_mask, 'offset_var_ch1'].mean(),
-                'offset_var_ch2': stats_df.loc[cl_mask, 'offset_var_ch2'].mean(),
-                'offset_diff': np.angle(np.exp(1j*stats_df.loc[cl_mask, 'offset_diff']).mean()),
-                'abs_offset_diff': stats_df.loc[cl_mask, 'abs_offset_diff'].mean(),
-                'pva_diff': stats_df.loc[cl_mask, 'pva_diff'].mean(),
-                'fwhm_ch1': stats_df.loc[cl_mask, 'fwhm_ch1'].mean(),
-                'fwhm_ch2': stats_df.loc[cl_mask, 'fwhm_ch2'].mean()
-            })
-            
+
+        if (has_cl if cl_only else (has_cl and has_dark)):
+            rows.append(_aggregate_sessions(stats_df, cl_mask, fly, 1, cl_diff_agg))
             if has_dark:
-                # Dark row
-                rows.append({
-                    'fly_id': fly,
-                    'cl': 0,
-                    'offset_ch1': sp.stats.circmean(stats_df.loc[dark_mask, 'offset_ch1']),
-                    'offset_ch2': sp.stats.circmean(stats_df.loc[dark_mask, 'offset_ch2']),
-                    'offset_var_ch1': stats_df.loc[dark_mask, 'offset_var_ch1'].mean(),
-                    'offset_var_ch2': stats_df.loc[dark_mask, 'offset_var_ch2'].mean(),
-                    'offset_diff': sp.stats.circmean(stats_df.loc[dark_mask, 'offset_diff']),
-                    'abs_offset_diff': stats_df.loc[dark_mask, 'abs_offset_diff'].mean(),
-                    'pva_diff': stats_df.loc[dark_mask, 'pva_diff'].mean(),
-                    'fwhm_ch1': stats_df.loc[dark_mask, 'fwhm_ch1'].mean(),
-                    'fwhm_ch2': stats_df.loc[dark_mask, 'fwhm_ch2'].mean()
-                })
-    
+                rows.append(_aggregate_sessions(stats_df, dark_mask, fly, 0, sp.stats.circmean))
+
     return pd.DataFrame(rows)
+
+
+# ----------------------------------------------------------------------------
+# Statistics binned by heading velocity / rho
+# ----------------------------------------------------------------------------
+def _rho_stats_binned(ts, dh_bins, abs):
+    """Two-channel rho and PVA difference binned by heading velocity (see :func:`rho_stats`)."""
+    n_bins = len(dh_bins)
+    dh_dig = np.digitize(np.abs(ts.dh) if abs else ts.dh, dh_bins) - 1
+
+    pvd = wrap_angle(np.diff(ts.phi, axis=0))
+    pvd = (np.abs(pvd) if abs else pvd).ravel()
+
+    return {
+        'rho1_dig': binned_mean(ts.rho[0], dh_dig, n_bins),
+        'rho2_dig': binned_mean(ts.rho[1], dh_dig, n_bins),
+        'pva_diff': binned_mean(pvd, dh_dig, n_bins)
+    }
+
 
 def rho_stats(sess_df, load_row, dh_bins, abs=True):
-    """Compute rho (motor neuron) statistics binned by heading change."""
+    """Compute rho (PVA magnitude) of both channels and the PVA difference binned by heading velocity.
+
+    Args:
+        sess_df: Session DataFrame with fly_id and closed_loop columns.
+        load_row: Callable to load preprocessed data.
+        dh_bins: Bin edges for heading velocity.
+        abs: If True, bin by absolute heading velocity and use the absolute PVA difference.
+
+    Returns:
+        DataFrame with fly_id, cl, rho1_dig, rho2_dig and pva_diff (arrays, one value per bin).
+    """
     rows = []
-    
+
     for _, row in sess_df.iterrows():
-        ts = session.GetTS(load_row(row), channels=[0,1], dh_sigma=.3)
-
-        dh = ts.dh
-        dh_dig = np.digitize(np.abs(dh) if abs else dh, dh_bins) - 1
-
-        rho1_dig = np.array([ts.rho[0, dh_dig == i].mean() for i in range(len(dh_bins))])
-        rho2_dig = np.array([ts.rho[1, dh_dig == i].mean() for i in range(len(dh_bins))])
-
-        pvd = (np.abs(np.angle(np.exp(1j*np.diff(ts.phi, axis=0)))) if abs 
-               else np.angle(np.exp(1j*np.diff(ts.phi, axis=0)))).ravel()
-        pva_diff = np.array([pvd[dh_dig == i].mean() for i in range(len(dh_bins))])
-        
-        rows.append({
-            'fly_id': row['fly_id'],
-            'cl': row['closed_loop'],
-            'rho1_dig': rho1_dig,
-            'rho2_dig': rho2_dig,
-            'pva_diff': pva_diff
-        })
+        ts = session.GetTS(load_row(row), channels=[0, 1], dh_sigma=.3)
+        rows.append({'fly_id': row['fly_id'], 'cl': row['closed_loop'],
+                     **_rho_stats_binned(ts, dh_bins, abs)})
 
     return pd.DataFrame(rows)
+
 
 def rho_stats_DTE(data, channel_lookup, dh_bins, abs=True):
-    """Compute rho statistics from DTE data binned by heading change."""
+    """Compute rho statistics from DTE data binned by heading velocity (see :func:`rho_stats`)."""
     rows = []
-    
+
     for fly, multitrial_dict in data.items():
-        for trial_name, trial_dict in multitrial_dict.items():
+        for trial_dict in multitrial_dict.values():
             ts = session.GetTS_DTE(trial_dict, channel_lookup[fly], dh_sigma=.3)
-            
-            dh = ts.dh
-            dh_dig = np.digitize(np.abs(dh) if abs else dh, dh_bins) - 1
-
-            rho1_dig = np.array([ts.rho[0, dh_dig == i].mean() for i in range(len(dh_bins))])
-            rho2_dig = np.array([ts.rho[1, dh_dig == i].mean() for i in range(len(dh_bins))])
-
-            pvd = (np.abs(np.angle(np.exp(1j*np.diff(ts.phi, axis=0)))) if abs
-                   else np.angle(np.exp(1j*np.diff(ts.phi, axis=0)))).ravel()
-            pva_diff = np.array([pvd[dh_dig == i].mean() for i in range(len(dh_bins))])
-            
-            rows.append({
-                'fly_id': fly,
-                'cl': 1,
-                'rho1_dig': rho1_dig,
-                'rho2_dig': rho2_dig,
-                'pva_diff': pva_diff
-            })
+            rows.append({'fly_id': fly, 'cl': 1, **_rho_stats_binned(ts, dh_bins, abs)})
 
     return pd.DataFrame(rows)
 
-def reformat_rho_stats():
-    pass
 
 def pvdiff_rho_stats(sess_df, load_row, pv_bins):
-    """Compute PVA difference statistics binned by rho (motor neuron activity)."""
-    rows = []
-    
-    for _, row in sess_df.iterrows():
-        ts = session.GetTS(load_row(row), channels=[0,1])
+    """Compute the PVA difference between channels binned by mean rho (PVA magnitude).
 
-        pva_diff = np.abs(np.angle(np.exp(1j*np.diff(ts.phi, axis=0)))).ravel()
+    Args:
+        sess_df: Session DataFrame with fly_id and closed_loop columns.
+        load_row: Callable to load preprocessed data.
+        pv_bins: Bin edges for the channel-averaged rho.
+
+    Returns:
+        DataFrame with fly_id, cl and pva_diff (array, one value per bin).
+    """
+    rows = []
+
+    for _, row in sess_df.iterrows():
+        ts = session.GetTS(load_row(row), channels=[0, 1])
+
+        pva_diff = np.abs(wrap_angle(np.diff(ts.phi, axis=0))).ravel()
         rho_dig = np.digitize(ts.rho.mean(axis=0), bins=pv_bins)
-        pva_diff_binned = np.array([pva_diff[rho_dig == i].mean() for i in range(pv_bins.shape[0])])
-        
+
         rows.append({
             'fly_id': row['fly_id'],
             'cl': row['closed_loop'],
-            'pva_diff': pva_diff_binned
+            'pva_diff': binned_mean(pva_diff, rho_dig, pv_bins.shape[0])
         })
-    
+
     return pd.DataFrame(rows)
 
-def reformat_pvdiff_rho_stats():
-    pass
 
+def cross_corr_stats(sess_df, load_row, delays=None, times=None):
+    """Compute the cross-correlation of the two channels' PVA as a function of delay.
 
-def cross_corr_stats(sess_df, load_row, delays, times):
-    """Compute cross-correlation statistics between channels."""
+    Args:
+        sess_df: Session DataFrame with fly_id and closed_loop columns.
+        load_row: Callable to load preprocessed data.
+        delays: Integer sample delays applied to channel 2 (default -50..50).
+        times: Times (s) at which to evaluate the interpolated correlation (default
+            ``delays * 0.01``).
+
+    Returns:
+        DataFrame with fly, cl, r (correlation at `times`) and argmax (index of the peak).
+    """
+    delays = np.arange(-50, 51) if delays is None else delays
+    times = delays * 0.01 if times is None else times
     rows = []
-    delays = np.arange(-50, 51)
-    times = delays * 0.01
-    
+
     for _, row in sess_df.iterrows():
         ts = session.GetTS(load_row(row), channels=(0, 1))
-        
-        # Vectorized correlation calculation
-        r = np.array([np.abs(np.correlate(np.exp(1j*ts.phi[0,:]), 
-                                           np.exp(1j*np.roll(ts.phi[1,:], d))) 
+
+        r = np.array([np.abs(np.correlate(np.exp(1j * ts.phi[0, :]),
+                                          np.exp(1j * np.roll(ts.phi[1, :], d)))
                              / ts.phi.shape[-1])[0]
                       for d in delays])
-        
-        f = sp.interpolate.interp1d(delays * ts.dt, r, kind='linear', 
-                                   bounds_error=False, fill_value='extrapolate')
+
+        f = sp.interpolate.interp1d(delays * ts.dt, r, kind='linear',
+                                    bounds_error=False, fill_value='extrapolate')
         r_interp = f(times)
-        
+
         rows.append({
             'fly': row['fly_id'],
             'cl': row['closed_loop'],
             'r': r_interp,
             'argmax': np.argmax(r_interp)
         })
-    
+
     return pd.DataFrame(rows)
 
 
-def plot_sess_heatmaps(ts, fly_id, sess_name, vmin=-.5, vmax=.5, plot_times = np.arange(0,360,60),
-                       ch1_heatmap = 'Greys', ch2_heatmap = 'Greens'):
+# ----------------------------------------------------------------------------
+# Figures
+# ----------------------------------------------------------------------------
+def _channel_traces(ts, cmaps):
+    """Per-channel :class:`plotting.Trace` list for (EPG, EL)."""
+    return [plotting.Trace.from_ts(label, ts, cmap=cmap, channel=ch)
+            for ch, (label, cmap) in enumerate(zip(('EPGs', 'ELs'), cmaps, strict=True))]
 
-    fig, ax = plt.subplots(3,2, figsize=[15,6], sharey=True, sharex=True)
 
-    
+def plot_sess_heatmaps(ts, fly_id, sess_name, vmin=-.5, vmax=.5, plot_times=DEFAULT_PLOT_TIMES,
+                       ch1_heatmap='Greys', ch2_heatmap='Greens'):
+    """Heatmaps of each channel (raw and heading-aligned) plus the PVA of both channels and their difference.
+
+    Args:
+        ts: Two-channel :class:`session.GetTS`.
+        fly_id: Fly identifier for the title.
+        sess_name: Session name for the title.
+        vmin: Minimum value for heatmap colorscale.
+        vmax: Maximum value for heatmap colorscale.
+        plot_times: Times (s) to mark on the time axis.
+        ch1_heatmap: Colormap for channel 1.
+        ch2_heatmap: Colormap for channel 2.
+
+    Returns:
+        Tuple of (figure, axes).
+    """
+    fig, ax = plt.subplots(3, 2, figsize=[15, 6], sharey=True, sharex=True)
+
     x = np.arange(ts.dff.shape[-1])
+    heading_ = utilities.heading_to_roi_coords(ts.heading)
+    aligned_pos = plotting.ALIGNED_HEADING_POS * np.ones_like(heading_)
 
-    heading_ = (ts.heading+np.pi)/(2*np.pi)*15
+    for row, (cmap, ch) in enumerate(((ch1_heatmap, 0), (ch2_heatmap, 1))):
+        h = ax[row, 0].imshow(ts.dff[ch, :, :], aspect='auto', interpolation='none',
+                              cmap=cmap, vmin=vmin, vmax=vmax)
+        ax[row, 0].scatter(x, heading_, s=5, color='orange')
+        fig.colorbar(h, ax=ax[row, 0])
 
-    h = ax[0, 0].imshow(ts.dff[0, :, :], aspect='auto', interpolation='none',
-                        cmap=ch1_heatmap, vmin=vmin, vmax=vmax)
-    ax[0, 0].scatter(x, heading_, s=5, color='orange')
-    fig.colorbar(h, ax=ax[0,0])
+        h = ax[row, 1].imshow(ts.dff_h_aligned[ch, :, :], aspect='auto', interpolation='none',
+                              cmap=cmap, vmin=vmin, vmax=vmax)
+        ax[row, 1].scatter(x, aligned_pos, s=5, color='orange')
+        fig.colorbar(h, ax=ax[row, 1])
 
-    h = ax[0, 1].imshow(ts.dff_h_aligned[0, :, :], aspect='auto', interpolation='none',
-                        cmap=ch1_heatmap, vmin=vmin, vmax=vmax)
-    ax[0, 1].scatter(x, 7.5*np.ones_like(heading_), s=5, color='orange')
-    fig.colorbar(h, ax=ax[0,1])
+    ax[0, 0].set_title('Ch 1')
+    ax[1, 0].set_title('Ch 2')
 
-    h = ax[1,0].imshow(ts.dff[1, :, :], aspect='auto', interpolation='none',
-                       cmap=ch2_heatmap, vmin=vmin, vmax=vmax)
-    ax[1,0].scatter(x, heading_, s=5, c='orange')
-    fig.colorbar(h, ax=ax[1,0])
+    phi_ = utilities.heading_to_roi_coords(ts.phi)
+    ax[2, 0].scatter(x, phi_[0, :], color=plt.get_cmap(ch1_heatmap)(.8), s=5, alpha=.4)
+    ax[2, 0].scatter(x, phi_[1, :], color=plt.get_cmap(ch2_heatmap)(.8), s=5, alpha=.4)
+    fig.colorbar(h, ax=ax[2, 0])
 
-    h = ax[1, 1].imshow(ts.dff_h_aligned[1, :, :], aspect='auto', interpolation='none',
-                        cmap=ch2_heatmap, vmin=vmin, vmax=vmax)
-    ax[1, 1].scatter(x, 7.5*np.ones_like(heading_), s=5, color='orange')
-    fig.colorbar(h, ax=ax[1,1])
+    phi_diff = utilities.heading_to_roi_coords(wrap_angle(np.diff(ts.phi, axis=0)))
+    ax[2, 1].scatter(x, phi_diff, c='blue', s=5)
+    fig.colorbar(h, ax=ax[2, 1])
 
-    ax[0,0].set_title('Ch 1')
-    ax[1,0].set_title('Ch 2')
-
-    phi_ = (ts.phi+np.pi)/2/np.pi*15
-    cmap = plt.get_cmap(ch1_heatmap)
-    ax[2,0].scatter(x, phi_[0,:], color=cmap(.8), s=5, alpha=.4)
-    cmap = plt.get_cmap(ch2_heatmap)
-    ax[2,0].scatter(x, phi_[1,:], color=cmap(.8), s=5, alpha=.4)
-    fig.colorbar(h, ax=ax[2,0])
-
-    phi_diff = np.angle(np.exp(1j*np.diff(ts.phi, axis=0)))
-    phi_diff = (phi_diff+np.pi)/2/np.pi*15
-    ax[2,1].scatter(x, phi_diff, c='blue', s=5)
-    fig.colorbar(h, ax=ax[2,1])
-
-    plot_times = plot_times[plot_times<ts.time.iloc[-1]]
+    plot_times = plot_times[plot_times < ts.time.iloc[-1]]
     for a in ax.flatten():
-        a.set_ylabel('ROIs')
-        a.set_yticks([-0.5,7.5,15.5], labels=[r'0', r'$\pi$', r'$2\pi$'])
-        
-        a.set_xticks(utilities.get_time_tick_indices(ts.time, plot_times), labels=plot_times)
-        a.set_xlabel('Time (s)')
+        plotting.format_roi_axis(a, 'y')
+        plotting.format_time_axis(a, ts.time, plot_times, 'x', clip=False)
 
-    
     fig.suptitle(f'{fly_id} - {sess_name}')
     fig.tight_layout()
 
     return fig, ax
-    
+
+
 def plot_pva_diff_histograms(ts, fly_id, sess_name,
-                             bins = np.linspace(-np.pi, np.pi, num=17), 
+                             bins=DEFAULT_OFFSET_BINS,
                              color='black'):
-    
+    """Histogram of the PVA difference between the two channels.
+
+    Args:
+        ts: Two-channel :class:`session.GetTS`.
+        fly_id: Fly identifier for the title.
+        sess_name: Session name for the title.
+        bins: Bins for the histogram.
+        color: Fill color.
+
+    Returns:
+        Tuple of (figure, axes).
+    """
     fig, ax = plt.subplots()
-    centers = (bins[1:] + bins[:-1])/2
 
-    pva_diff = np.angle(np.exp(1j*(np.diff(ts.phi,axis=0))))
-
-    hist, _ = np.histogram(pva_diff, bins=bins)
-    hist = hist/hist.sum()
+    pva_diff = wrap_angle(np.diff(ts.phi, axis=0))
+    hist, _ = utilities.normalized_histogram(pva_diff, bins)
 
     ax.fill_between(bins[:-1], hist, color=color, alpha=.4)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    ax.set_xticks([-np.pi,0,np.pi], labels=[r'-$\pi$', '0', r'$\pi$'])
+    ax.set_xticks([-np.pi, 0, np.pi], labels=[r'-$\pi$', '0', r'$\pi$'])
     ax.set_xlabel(r'$\Delta$ PVA')
     ax.set_ylabel('Proportion')
-    # ax.set_yticks([0,.05, .1,.15, .2, .25])
-    # ax.set_ylim([0,.25])
-    
+
     fig.suptitle(f'{fly_id} - {sess_name}')
     fig.tight_layout()
     return fig, ax
 
 
-def plot_sess_histograms(ts, fly_id, sess_name, bins = np.linspace(-np.pi, np.pi, num=17), 
-                         cmaps=('Greys', 'Greens')):
-    
-    fig_hist, ax_hist = plt.subplots()
-    fig_polar, ax_polar = plt.subplots(subplot_kw={'projection':'polar'})
-    centers = (bins[1:]+bins[:-1])/2
+def plot_sess_histograms(ts, fly_id, sess_name, bins=DEFAULT_OFFSET_BINS,
+                         cmaps=CH_COLORS):
+    """Offset histograms and polar mean-vector plots for both channels.
+
+    Args:
+        ts: Two-channel :class:`session.GetTS`.
+        fly_id: Fly identifier for the title.
+        sess_name: Session name for the title.
+        bins: Bins for the histogram.
+        cmaps: Colormaps for (EPG, EL); the color drawn is each colormap at 0.8.
+
+    Returns:
+        Tuple of ((fig_hist, ax_hist), (fig_polar, ax_polar)).
+    """
+    return plotting.plot_offset_histograms(_channel_traces(ts, cmaps), bins=bins,
+                                           suptitle=f'{fly_id} - {sess_name}', legend=False)
 
 
-    def plot_hist(ch, cmap, hatch=None):
-        offset = ts.offset[ch,:]
-        hist, _ = np.histogram(offset, bins=bins)
-        hist = hist/hist.sum()
-        
-        offset_c_mu = ts.offset_c[ch,:].mean()
-        
-        _cmap = plt.get_cmap(cmap)
-        color = _cmap(.8)
-        if hatch is not None:
-            ax_hist.fill_between(centers, hist, color='none', alpha=.4, hatch=hatch, edgecolor=color)
-            ax_polar.plot(np.angle(offset_c_mu)*np.ones([2,]), [0, np.abs(offset_c_mu)], color=color, linewidth=2,
-                          linestyle='--', alpha=.4)
-            
-        else:
-            ax_hist.fill_between(centers, hist, color=color, alpha=.4)
-            ax_polar.plot(np.angle(offset_c_mu)*np.ones([2,]), [0, np.abs(offset_c_mu)], color=color, linewidth=2)
-       
-        
-        
-        
-    
-    fig_hist.suptitle(f'{fly_id} - {sess_name}')
-    fig_polar.suptitle(f'{fly_id} - {sess_name}')
-        
-    plot_hist(0, cmaps[0])
-    plot_hist(1, cmaps[1])  
-        
-    
-    
-    ax_hist.spines['top'].set_visible(False)
-    ax_hist.spines['right'].set_visible(False)
-    ax_hist.set_xticks([-np.pi,0,np.pi], labels=[r'-$\pi$', '0', r'$\pi$'])
-    ax_hist.set_xlabel('Offset')
-    ax_hist.set_yticks([0,.05, .1,.15, .2, .25])
-    ax_hist.set_ylim([0,.25])
-    ax_hist.set_ylabel('Proportion')
-    
-    fig_hist.tight_layout()    
-    
-    ax_polar.set_xticks([0, np.pi/2, np.pi, 3*np.pi/2], ['0', r'$\pi$/2', r'$\pi$', r'3$\pi$/2'])
-    ax_polar.set_yticks([0,.2, .4, .6, .8])
-    
-    # ax_polar.legend()
-    fig_polar.tight_layout()
-    
-    return (fig_hist, ax_hist), (fig_polar, ax_polar)
+def plot_transpose_heatmaps(ts, fly_id, sess_name, vmin=-.5, vmax=.5, plot_times=DEFAULT_PLOT_TIMES,
+                            ch1_heatmap='Greys', ch2_heatmap='Greens'):
+    """Transposed (time down, ROIs across) heatmaps of both channels, their PVAs and PVA difference.
 
+    Args:
+        ts: Two-channel :class:`session.GetTS`.
+        fly_id: Fly identifier for the title.
+        sess_name: Session name for the title.
+        vmin: Minimum value for heatmap colorscale.
+        vmax: Maximum value for heatmap colorscale.
+        plot_times: Times (s) to mark on the time axis.
+        ch1_heatmap: Colormap for channel 1.
+        ch2_heatmap: Colormap for channel 2.
 
-def plot_transpose_heatmaps(ts, fly_id, sess_name, vmin=-.5, vmax=.5, plot_times = np.arange(0,360,60),
-                       ch1_heatmap = 'Greys', ch2_heatmap = 'Greens'):
-
+    Returns:
+        Tuple of (figure, axes).
+    """
     fig = plt.figure(figsize=[9, 15])
+    gs = GS(1, 4, width_ratios=[2, 2, 1, 1])
+    ax = [fig.add_subplot(gs[i]) for i in range(4)]
 
-    gs = GS(1,4, width_ratios=[2,2,1,1])
-    
-    ax = [fig.add_subplot(gs[0]), 
-          fig.add_subplot(gs[1]), 
-          fig.add_subplot(gs[2]), 
-          fig.add_subplot(gs[3])]
-    
-    
     x = np.arange(ts.dff.shape[-1])
+    heading_ = utilities.heading_to_roi_coords(ts.heading)
 
-    heading_ = (ts.heading+np.pi)/(2*np.pi)*15
+    for a, cmap, ch in ((ax[0], ch1_heatmap, 0), (ax[1], ch2_heatmap, 1)):
+        h = a.imshow(ts.dff[ch, :, :].T, aspect='auto', interpolation='none',
+                     cmap=cmap, vmin=vmin, vmax=vmax)
+        a.scatter(heading_, x, s=5, color='orange')
+        fig.colorbar(h, ax=a)
 
-    h = ax[0].imshow(ts.dff[0, :, :].T, aspect='auto', interpolation='none',
-                     cmap=ch1_heatmap, vmin=vmin, vmax=vmax)
-    ax[0].scatter(heading_, x, s=5, color='orange')
-    fig.colorbar(h, ax=ax[0])
-
-    
-    h = ax[1].imshow(ts.dff[1, :, :].T, aspect='auto', interpolation='none',
-                     cmap=ch2_heatmap, vmin=vmin, vmax=vmax)
-    ax[1].scatter(heading_, x, s=5, c='orange')
-    fig.colorbar(h, ax=ax[1])
-
-    
     ax[0].set_title('Ch 1')
     ax[1].set_title('Ch 2')
 
-    phi_ = (ts.phi+np.pi)/2/np.pi*15
-    cmap = plt.get_cmap(ch1_heatmap)
-    ax[2].scatter(phi_[0,:], x, color=cmap(.8), s=5, alpha=.4)
-    cmap = plt.get_cmap(ch2_heatmap)
-    ax[2].scatter(phi_[1,:], x, color=cmap(.8), s=5, alpha=.4)
+    phi_ = utilities.heading_to_roi_coords(ts.phi)
+    ax[2].scatter(phi_[0, :], x, color=plt.get_cmap(ch1_heatmap)(.8), s=5, alpha=.4)
+    ax[2].scatter(phi_[1, :], x, color=plt.get_cmap(ch2_heatmap)(.8), s=5, alpha=.4)
     fig.colorbar(h, ax=ax[2])
 
-    phi_diff = np.angle(np.exp(1j*np.diff(ts.phi, axis=0)))
-    phi_diff = (phi_diff+np.pi)/2/np.pi*15
+    phi_diff = utilities.heading_to_roi_coords(wrap_angle(np.diff(ts.phi, axis=0)))
     ax[3].scatter(phi_diff, x, c='blue', s=5)
     fig.colorbar(h, ax=ax[3])
 
-    plot_times = plot_times[plot_times<ts.time.iloc[-1]]
+    plot_times = plot_times[plot_times < ts.time.iloc[-1]]
     for a in ax:
-        a.set_xlabel('ROIs')
-        a.set_xticks([-0.5,7.5,15.5], labels=[r'0', r'$\pi$', r'$2\pi$'])
+        plotting.format_roi_axis(a, 'x')
+        plotting.format_time_axis(a, ts.time, plot_times, 'y', clip=False)
+        a.set_ylim([ts.dff.shape[-1] - 0.5, -.5])
 
-        a.set_yticks(utilities.get_time_tick_indices(ts.time, plot_times), labels=plot_times)
-        a.set_ylabel('Time (s)')
-
-        a.set_ylim([ts.dff.shape[-1]-0.5, -.5])
-
-    
     fig.suptitle(f'{fly_id} - {sess_name}')
     fig.tight_layout()
 
     return fig, ax
-    
 
 
-def plot_sess_heatmaps_w_hist(ts, fly_id, sess_name, vmin=-.5, vmax=3, plot_times = np.arange(0,360,60),
-                       ch1_heatmap = 'Greys', ch2_heatmap = 'Greens', twindow=None,
-                       bins = np.linspace(-np.pi, np.pi, num=17)):
-    
-    fig = plt.figure(figsize=[8,4])
-    gs = GS(2,4, figure=fig, width_ratios=[6,1,.8, .2],wspace=.05,hspace=.8)
-    heatmap_axs = [fig.add_subplot(gs[0,0]), fig.add_subplot(gs[1,0])]
-    hist_axs = [fig.add_subplot(gs[0,1]), fig.add_subplot(gs[1,1])]
-    cbar_ax = [fig.add_subplot(gs[i,3]) for i in range(2)]
+def plot_sess_heatmaps_w_hist(ts, fly_id, sess_name, vmin=-.5, vmax=3, plot_times=DEFAULT_PLOT_TIMES,
+                              ch1_heatmap='Greys', ch2_heatmap='Greens', twindow=None,
+                              bins=DEFAULT_OFFSET_BINS):
+    """EPG and EL heatmaps, each with its offset distribution (titled with the offset variance).
 
+    Args:
+        ts: Two-channel :class:`session.GetTS`.
+        fly_id: Fly identifier for the title.
+        sess_name: Session name for the title.
+        vmin: Minimum value for heatmap colorscale.
+        vmax: Maximum value for heatmap colorscale.
+        plot_times: Times (s) to mark on the time axis.
+        ch1_heatmap: Colormap for channel 1 (EPGs).
+        ch2_heatmap: Colormap for channel 2 (ELs).
+        twindow: Optional tuple (start_time, end_time) to limit the heatmap window.
+        bins: Bins for the offset histogram.
 
- 
-    
-    def plot_row(ch, row, cmap, title, hatch=None):
-        dff = ts.dff[ch,:,:]
-        heading = ts.heading
-        offset = ts.offset[ch,:]
-        
-        time = ts.time
-
-        if twindow is not None:
-            mask = (time>=twindow[0]) * (time<=twindow[1])
-        else:
-            mask = np.ones_like(time)>0
-
-        dff= dff[:,mask]
-        time = time[mask]
-        heading = heading[mask]
-
-        x = np.arange(dff.shape[1])
-        heading_ = (heading + np.pi) / (2 * np.pi) * 15
-        h = heatmap_axs[row].imshow(dff, aspect='auto', cmap=cmap, interpolation='none', vmin=vmin, vmax=vmax)
-        fig.colorbar(h, cax=cbar_ax[row])
-        heatmap_axs[row].scatter(x, heading_, color='orange', s=5)
-
-        heatmap_axs[row].set_ylabel('ROIs')
-        heatmap_axs[row].set_yticks([-0.5,7.5,15.5], labels=[r'0', r'$\pi$', r'$2\pi$'])
-        heatmap_axs[row].yaxis.set_minor_locator(AutoMinorLocator())
-        
-        _plot_times = plot_times[plot_times<time.iloc[-1]]
-        heatmap_axs[row].set_xticks(utilities.get_time_tick_indices(time, _plot_times), labels=_plot_times)
-        heatmap_axs[row].set_xlabel('Time (s)')
-        
-        heatmap_axs[row].set_title(title)
-
-        
-      
-        centers = (bins[:-1] + bins[1:]) / 2
-        hist, _ = np.histogram(offset, bins=bins)
-        hist = hist / hist.sum()  # normalize
-        if hatch is None:
-            hist_axs[row].fill_betweenx(centers, 0, hist, color=cmap(.8), alpha=.5)
-        else:
-            hist_axs[row].fill_betweenx(centers, 0, hist, alpha=1, hatch=hatch,color='none', edgecolor=cmap(.8))
-
-        # hist_axs[row].set_yticks([-np.pi,-3*np.pi/4, -np.pi/2, -np.pi/4, 0, np.pi/4, np.pi/2, 3*np.pi/4, np.pi], 
-        #                          labels=[r'-$\pi$', '', '', '', r'0','', '', '', r'$\pi$'])
-        hist_axs[row].set_yticks([-np.pi, 0,  np.pi], 
-                                 labels=[r'-$\pi$',  r'0', r'$\pi$'])
-        hist_axs[row].yaxis.set_minor_locator(AutoMinorLocator())
-        hist_axs[row].set_ylim([np.pi, -np.pi])
-        # hist_axs[row].set_xlim(left=0)
-        hist_axs[row].grid(True, axis='y', linestyle='-', alpha=0.8,linewidth=2.5, which='major')
-        ygridlines = hist_axs[row].get_ygridlines()
-        ygridlines[1].set_color('orange')
-        hist_axs[row].grid(True, axis='y', linestyle=':', alpha=0.5, linewidth=1.5, which='minor')
-        hist_axs[row].set_ylabel('Offset')
-        hist_axs[row].yaxis.tick_right()
-        hist_axs[row].yaxis.set_label_position('right')
-        hist_axs[row].set_xlabel('Prop.')
-        offset_var = sp.stats.circvar(offset, low=-np.pi, high=np.pi)
-        hist_axs[row].set_title(f"variance={offset_var:.2f}" )
-    
-
-    plot_row(0, 0, plt.cm.get_cmap('Greys'), 'EPGs')
-    plot_row(1, 1, plt.cm.get_cmap('Greens'), 'ELs')
-    
-    fig.suptitle(f'{fly_id} - {sess_name}')
-
-    return fig, (heatmap_axs, hist_axs, cbar_ax)
+    Returns:
+        Tuple of (figure, (heatmap_axs, hist_axs, cbar_ax)).
+    """
+    return plotting.plot_heatmaps_with_offset_hist(
+        _channel_traces(ts, (ch1_heatmap, ch2_heatmap)), f'{fly_id} - {sess_name}', figsize=[8, 4],
+        vmin=vmin, vmax=vmax, plot_times=plot_times, twindow=twindow, bins=bins, hist_title='variance')

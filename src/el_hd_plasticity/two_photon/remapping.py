@@ -1,13 +1,44 @@
+"""Analysis and figures for optogenetic remapping experiments.
+
+In these experiments the EPG bump offset is measured at ``baseline`` and again after the
+optogenetic stimulus was paired with a visual cue shifted by 0 or 180 degrees (``post_0deg``,
+``post_180deg``; or ``post_novis1``/``post_novis2`` when no visual cue was shown). The session
+table has one row per scan with its ``scan_type``; per-scan offset summaries ('mean offset',
+'mean vec. len', 'offset var.') are averaged per fly with :func:`build_sum_stats` and compared
+with :func:`avg_diff` (remapping error) and the figure helpers below.
+
+Figures take ``ts_dict``: a dict with a ``'fly'`` name and :class:`session.GetTS` objects for
+``'baseline'``, ``'post_0deg'`` and ``'post_180deg'``.
+"""
+
 import numpy as np
+import pandas as pd
 import scipy as sp
 from matplotlib import pyplot as plt
 
-from matplotlib.gridspec import GridSpec as GS
-from matplotlib.ticker import (MultipleLocator, AutoMinorLocator)
+from . import plotting
+from .utilities import (
+    DEFAULT_OFFSET_BINS,
+    DEFAULT_PLOT_TIMES,
+    SCAN_POSITIONS,
+    SHORT_PLOT_TIMES,
+    nearest_equivalent_angle,
+)
 
-from .utilities import get_time_tick_indices
+STANDARD_SCAN_TYPES = ('baseline', 'post_0deg', 'post_180deg')
+NOVIS_SCAN_TYPES = ('baseline', 'post_novis1', 'post_novis2')
+ALL_SCAN_TYPES = ('baseline', 'post_0deg', 'post_180deg', 'post_novis1', 'post_novis2')
+
+# Summary statistic name used in sum_stats columns -> per-scan column of the session table
+SUMMARY_METRICS = {'mean offset': 'mean offset', 'vec. len': 'mean vec. len', 'offset var.': 'offset var.'}
+
+# Heatmap/histogram colormap of each scan type
+SCAN_CMAPS = {'baseline': 'Greys', 'post_0deg': 'PuRd', 'post_180deg': 'GnBu'}
 
 
+# ----------------------------------------------------------------------------
+# Optogenetic responses
+# ----------------------------------------------------------------------------
 def get_opto_resp(pp, zscore=False):
     """Extract per-ROI optogenetic responses aligned to stimulus offsets.
 
@@ -15,6 +46,8 @@ def get_opto_resp(pp, zscore=False):
     frames around triggers, computes dF/F (z-scored) and returns the mean
     response for a short window after each opto offset organized as
     (n_rois, n_points, n_reps).
+
+    NOTE: the masked frames are set to NaN in ``pp.timeseries['rois']`` in place.
 
     Args:
         pp: Preprocessed session object with attributes `voltage_recording_aligned`,
@@ -24,7 +57,6 @@ def get_opto_resp(pp, zscore=False):
     Returns:
         opto_resp: ndarray shaped (n_rois, n_points, n_reps) containing mean responses.
     """
-    time = pp.voltage_recording_aligned['Time(ms)']
     opto_trig = pp.voltage_recording_aligned[' Opto Trigger']
 
     # find rising edges of opto trigger (>1000 indicates trigger)
@@ -66,214 +98,281 @@ def get_opto_resp(pp, zscore=False):
         for r in range(n_rois):
             opto_resp[r, :, :] = sp.stats.zscore(opto_resp[r, :, :], axis=None)
     return opto_resp
-def plot_min_dist(df, h_ax, x=np.arange(3), color='black', zero=False):
-    if not 'post_novis1 mean offset' in df.columns:
-    
-        for _, row in df.iterrows():
-            b = row['baseline mean offset']
-            
-            if zero:
-                _p0 = row['post_0deg mean offset']
-                p0 = np.array([_p0, _p0+2*np.pi, _p0-2*np.pi])
-                p0 = p0[np.argmin(np.abs(b-p0))]
-            else:
-                p0 = row['post_0deg mean offset']
-        
-            
-            _p180 = row['post_180deg mean offset']
-            p180 = np.array([_p180, _p180+2*np.pi, _p180-2*np.pi])
-            p180 = p180[np.argmin(np.abs(b-p180))]
-            
-            h_ax.scatter(x, [b,p0,p180], color=color)
-            # h_ax.scatter(x, [b,p0,p180], color=plt.cm.hsv((b+np.pi)/(2*np.pi)), alpha=1)
-            h_ax.plot(x, [b,p0,p180], color=color, alpha=.2)
-            
-    else:
-        for _, row in df.iterrows():
-            b = row['baseline mean offset']
-            
-            if zero:
-                _p0 = row['post_novis1 mean offset']
-                p0 = np.array([_p0, _p0+2*np.pi, _p0-2*np.pi])
-                p0 = p0[np.argmin(np.abs(b-p0))]
-            else:
-                p0 = row['post_novis1 mean offset']
-        
-            
-            _p180 = row['post_novis2 mean offset']
-            p180 = np.array([_p180, _p180+2*np.pi, _p180-2*np.pi])
-            p180 = p180[np.argmin(np.abs(b-p180))]
-            
-            h_ax.scatter(x, [b,p0,p180], color=color)
-            # h_ax.scatter(x, [b,p0,p180], color=plt.cm.hsv((b+np.pi)/(2*np.pi)), alpha=1)
-            h_ax.plot(x, [b,p0,p180], color=color, alpha=.2)
 
-def plot_sess_heatmaps(ts_dict, vmin=-.5, vmax=.5, plot_times = np.arange(0, 180, 60)):
+
+def stack_opto_responses(df, load_row, condition, folder, scan_type):
+    """Stack z-scored opto responses of all sessions of a condition and scan type.
+
+    Args:
+        df: Session table with condition, scan_type and folder columns.
+        load_row: Callable loading a preprocessed session from a table row.
+        condition: Value of the ``condition`` column to select.
+        folder: Value of the ``folder`` column to select.
+        scan_type: Value of the ``scan_type`` column to select.
+
+    Returns:
+        Array of shape (n_sessions, n_rois, n_points, n_reps); see :func:`get_opto_resp`.
+    """
+    sel = df.loc[(df['condition'] == condition) & (df['scan_type'] == scan_type) & (df['folder'] == folder)]
+    return np.stack([get_opto_resp(load_row(row), zscore=True) for _, row in sel.iterrows()])
+
+
+def get_mu_sem(opto_resp_al, condition, scan_type):
+    """Mean and SEM (across sessions) of the aligned opto response for a condition and scan type.
+
+    Args:
+        opto_resp_al: Nested dict ``opto_resp_al[condition][scan_type]`` of arrays shaped
+            (n_sessions, n_rois, n_points, n_reps).
+        condition: Key of the first level.
+        scan_type: Key of the second level.
+
+    Returns:
+        Tuple (mu, sem), each of length n_rois.
+    """
+    resp = opto_resp_al[condition][scan_type].mean(axis=(2, 3))
+    mu = resp.mean(axis=0)
+    sem = sp.stats.sem(resp, axis=0)
+    return mu, sem
+
+
+# ----------------------------------------------------------------------------
+# Per-fly offset summaries
+# ----------------------------------------------------------------------------
+def load_sess_df(basedir, folder):
+    """Load ``<basedir>/sessions.csv`` and add the columns used by the remapping analyses.
+
+    Args:
+        basedir: pathlib.Path of the experiment folder containing sessions.csv.
+        folder: Label of this experiment folder, used to tell pooled experiments apart.
+
+    Returns:
+        Session DataFrame with a unique ``fly_id`` (date, fly, condition, folder), empty
+        'mean offset' / 'offset var.' / 'mean vec. len' columns to be filled per scan, and
+        ``folder`` and ``basedir`` columns.
+    """
+    sess_df = pd.read_csv(basedir / 'sessions.csv')
+
+    sess_df['fly_id'] = [row['date'] + '_' + row['fly'] + '_' + row['condition'] + '_' + folder
+                         for _, row in sess_df.iterrows()]
+    sess_df['mean offset'] = np.nan
+    sess_df['offset var.'] = np.nan
+    sess_df['mean vec. len'] = np.nan
+    sess_df['folder'] = folder
+    sess_df['basedir'] = str(basedir)
+    return sess_df
+
+
+def build_sum_stats(df, fly_list, conditions=None, scan_types=None, extra_metrics=()):
+    """Average the per-scan offset summaries of each fly, one column per scan type and statistic.
+
+    Args:
+        df: Session table with fly_id, scan_type and the per-scan summary columns of
+            :data:`SUMMARY_METRICS` (plus any `extra_metrics`).
+        fly_list: fly_id of each fly to include.
+        conditions: Optional condition label for each fly (same length as `fly_list`); adds a
+            ``condition`` column.
+        scan_types: Scan types to summarize. If None, the standard set (baseline, post_0deg,
+            post_180deg) is used, or the no-visual-cue set (baseline, post_novis1, post_novis2)
+            if the first fly_id contains 'novis'. Scan types a fly has no sessions for are NaN.
+        extra_metrics: Additional per-scan columns of `df` to average (e.g. ``('post_dark',)``).
+
+    Returns:
+        DataFrame with fly_id, [condition] and columns '<scan_type> mean offset',
+        '<scan_type> vec. len', '<scan_type> offset var.' (and one per extra metric).
+    """
+    fly_list = list(fly_list)
+    if scan_types is None:
+        scan_types = NOVIS_SCAN_TYPES if 'novis' in fly_list[0] else STANDARD_SCAN_TYPES
+    metrics = {**SUMMARY_METRICS, **{m: m for m in extra_metrics}}
+
+    columns = ['fly_id'] + (['condition'] if conditions is not None else [])
+    columns += [f'{s} {name}' for s in scan_types for name in metrics]
+
+    rows = []
+    for i, fly in enumerate(fly_list):
+        row = {'fly_id': fly}
+        if conditions is not None:
+            row['condition'] = conditions[i]
+        fly_df = df.loc[df['fly_id'] == fly]
+        for s in scan_types:
+            scan_df = fly_df.loc[fly_df['scan_type'] == s]
+            for name, col in metrics.items():
+                row[f'{s} {name}'] = scan_df[col].mean()
+        rows.append(row)
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def avg_diff(sum_stats, novis=None):
+    """Average remapping error: distance of the post-0deg/180deg offsets from 0 and pi.
+
+    For each fly, the circular distance of the offset after the 0 degree cue from 0, and of the
+    offset after the 180 degree cue from pi, averaged. 0 is perfect remapping; pi/2 is chance.
+
+    Args:
+        sum_stats: Output of :func:`build_sum_stats` (or a subset of its rows).
+        novis: If True use the no-visual-cue scans (post_novis1/post_novis2) instead of
+            post_0deg/post_180deg. If None, decided by whether `sum_stats` has no-visual-cue
+            columns; pass explicitly when the table contains both sets (e.g. NaN filled).
+
+    Returns:
+        Series of average errors in radians, indexed like `sum_stats`.
+    """
+    if novis is None:
+        novis = 'post_novis1 mean offset' in sum_stats.columns
+    scan0, scan180 = ('post_novis1', 'post_novis2') if novis else ('post_0deg', 'post_180deg')
+
+    diff0 = np.abs(sum_stats[f'{scan0} mean offset'])
+    diff0 = np.minimum(diff0, 2 * np.pi - diff0)
+
+    diff180 = np.abs(np.pi - sum_stats[f'{scan180} mean offset'])
+    diff180 = np.minimum(diff180, 2 * np.pi - diff180)
+
+    return (diff0 + diff180) / 2
+
+
+# ----------------------------------------------------------------------------
+# Figures
+# ----------------------------------------------------------------------------
+def plot_min_dist(df, h_ax, x=SCAN_POSITIONS, color='black', zero=False, novis=None):
+    """Plot each fly's offset at baseline and after the two cues, as lines across scan types.
+
+    Post-cue offsets are shifted by multiples of 2pi to lie closest to the baseline offset, so a
+    fly that rotates by a small amount does not appear to jump across the wrap-around.
+
+    Args:
+        df: Output of :func:`build_sum_stats`.
+        h_ax: Axes to draw on.
+        x: x positions of the three scan types.
+        color: Line/marker color.
+        zero: Also unwrap the first post-cue offset toward baseline (default: plot as is).
+        novis: Plot post_novis1/post_novis2 instead of post_0deg/post_180deg. If None, decided by
+            whether `df` has no-visual-cue columns.
+    """
+    if novis is None:
+        novis = 'post_novis1 mean offset' in df.columns
+    scan0, scan180 = ('post_novis1', 'post_novis2') if novis else ('post_0deg', 'post_180deg')
+
+    for _, row in df.iterrows():
+        b = row['baseline mean offset']
+
+        p0 = row[f'{scan0} mean offset']
+        if zero:
+            p0 = nearest_equivalent_angle(p0, b)
+        p180 = nearest_equivalent_angle(row[f'{scan180} mean offset'], b)
+
+        h_ax.scatter(x, [b, p0, p180], color=color)
+        h_ax.plot(x, [b, p0, p180], color=color, alpha=.2)
+
+
+def plot_row_sum_stats(sum_stats, ax, row, condition, novis=False):
+    """Draw each fly's mean offset vector (and the across-fly mean vector) on a row of polar axes.
+
+    Baseline is drawn on ``ax[row, 0]`` and the two post-cue scans on ``ax[row, 1]``. For the
+    standard scan types the circular mean offset after each cue is also printed.
+
+    Args:
+        sum_stats: Output of :func:`build_sum_stats` with a ``condition`` column.
+        ax: 2D array of polar axes.
+        row: Row of `ax` to draw on.
+        condition: Value of the ``condition`` column to plot (also used as title).
+        novis: Draw post_novis1/post_novis2 instead of post_0deg/post_180deg.
+    """
+    stats = sum_stats.loc[sum_stats['condition'] == condition].copy()
+    if novis:
+        post = {'post_novis1': plt.cm.PuOr(.2), 'post_novis2': plt.cm.PuOr(.8)}
+    else:
+        post = {'post_0deg': plt.cm.PuRd(.8), 'post_180deg': plt.cm.GnBu(.8)}
+    remap_label = {'post_0deg': 'remap 0', 'post_180deg': 'remap 180'}
+
+    def mean_vector(scan):
+        """Across-fly mean of the offset vectors (vec. len, mean offset) of one scan type."""
+        offset = stats[f'{scan} mean offset']
+        v = stats[f'{scan} vec. len'] * (np.cos(offset) + 1j * np.sin(offset))
+        return v.mean()
+
+    for _, r in stats.iterrows():
+        ax[row, 0].plot(r['baseline mean offset'] * np.ones([2, ]), [0, r['baseline vec. len']],
+                        color=plt.cm.Greys(.8), alpha=.4, linewidth=2)
+        for scan, color in post.items():
+            ax[row, 1].plot(r[f'{scan} mean offset'] * np.ones([2, ]), [0, r[f'{scan} vec. len']],
+                            color=color, alpha=.4, linewidth=2)
+
+    baseline_v = mean_vector('baseline')
+    ax[row, 0].plot(np.angle(baseline_v) * np.ones((2,)), np.absolute(baseline_v) * np.array([0, 1]),
+                    color='black', linewidth=4)
+
+    for scan, color in post.items():
+        v = mean_vector(scan)
+        ax[row, 1].plot(np.angle(v) * np.ones((2,)), np.absolute(v) * np.array([0, 1]),
+                        color=color, linewidth=4, label=scan)
+        if not novis:
+            print(f"{condition} {remap_label[scan]} {np.angle(v)}")
+
+    ax[row, 0].set_title(condition)
+    ax[row, 1].set_title(condition)
+
+    for col in range(2):
+        ax[row, col].set_xticks([0, np.pi/2, np.pi, 3*np.pi/2], ['0', r'$\pi$/2', r'$\pi$', r'3$\pi$/2'])
+        ax[row, col].set_yticks([0, .2, .4, .6, .8])
+        ax[row, col].set_ylim(0, .8)
+
+    ax[row, 1].legend()
+
+
+def _scan_traces(ts_dict):
+    """One :class:`plotting.Trace` per scan type (baseline, post_0deg, post_180deg)."""
+    return [plotting.Trace.from_ts(key, ts_dict[key], cmap) for key, cmap in SCAN_CMAPS.items()]
+
+
+def plot_sess_heatmaps(ts_dict, vmin=-.5, vmax=.5, plot_times=SHORT_PLOT_TIMES):
     """Plot per-session heatmaps aligned to time and heading.
-    
+
     Args:
         ts_dict: Dict with keys 'baseline', 'post_0deg', 'post_180deg' each with
                  attributes dff, time, heading, dff_h_aligned.
         vmin, vmax: Color limits for heatmap.
         plot_times: Time points (in seconds) to mark on x-axis.
-    
+
     Returns:
         fig, ax: Matplotlib figure and axes.
     """
-    fig, ax = plt.subplots(3, 2, figsize=[15,6], sharey=True, sharex=True)
-        
-    
-    def plot_row(key, row, cmap):
-        dff = ts_dict[key].dff
-        time = ts_dict[key].time
-        x = np.arange(dff.shape[1])
-        heading_ = (ts_dict[key].heading+np.pi)/(2*np.pi)*15
-        h = ax[row,0].imshow(dff, aspect='auto', cmap=cmap, vmin=vmin, vmax=vmax)
-        fig.colorbar(h, ax=ax[row,0])
-        
-        ax[row,0].scatter(x, heading_, color='orange', s=5)
-        
-        h = ax[row,1].imshow(ts_dict[key].dff_h_aligned, aspect='auto', cmap=cmap, vmin=vmin, vmax=vmax)
-        fig.colorbar(h, ax=ax[row,1])
-        ax[row,1].scatter(x, 7.5*np.ones_like(heading_), color='orange', s=5)
-        
-        ax[row,0].set_ylabel('ROIs')
-        ax[row,0].set_yticks([-0.5,7.5,15.5], labels=[r'0', r'$\pi$', r'$2\pi$'])
-        
-        ax[row,0].set_xticks(get_time_tick_indices(time, plot_times), labels=plot_times)
-        ax[row,0].set_xlabel('Time (s)')
-        
-        ax[row,0].set_title(key)
-        
-        
-        
-    
-    plot_row('baseline', 0, 'Greys')
-    plot_row('post_0deg', 1, 'PuRd')
-    plot_row('post_180deg', 2, 'GnBu')
-    fig.suptitle(ts_dict['fly'])
-    
-    fig.tight_layout()
-    
-    return fig, ax
-    
-    
- 
-def plot_sess_histograms(ts_dict, bins = np.linspace(-np.pi, np.pi, num=17)):
-    
-    fig_hist, ax_hist = plt.subplots()
-    fig_polar, ax_polar = plt.subplots(subplot_kw={'projection':'polar'})
-    centers = (bins[1:]+bins[:-1])/2
-    def plot_hist(key, color):
-        offset = ts_dict[key].offset
-        hist, _ = np.histogram(offset, bins=bins)
-        hist = hist/hist.sum()
-        
-        ax_hist.fill_between(centers, hist, color=color, alpha=.4)
-        
-        offset_c_mu = ts_dict[key].offset_c.mean()
-        ax_polar.plot(np.angle(offset_c_mu)*np.ones([2,]), [0, np.abs(offset_c_mu)], color=color, linewidth=2, label=key)
-        
-        
-    plot_hist('baseline', 'black')
-    plot_hist('post_0deg', plt.cm.PuRd(.8))
-    plot_hist('post_180deg', plt.cm.GnBu(.8))
-    
-    ax_hist.spines['top'].set_visible(False)
-    ax_hist.spines['right'].set_visible(False)
-    ax_hist.set_xticks([-np.pi,0,np.pi], labels=[r'-$\pi$', '0', r'$\pi$'])
-    ax_hist.set_xlabel('Offset')
-    ax_hist.set_yticks([0,.05, .1,.15, .2, .25])
-    ax_hist.set_ylim([0,.25])
-    ax_hist.set_ylabel('Proportion')
-    ax_hist.set_title(ts_dict['fly'])        
-    fig_hist.tight_layout()    
-    
-    ax_polar.set_xticks([0, np.pi/2, np.pi, 3*np.pi/2], ['0', r'$\pi$/2', r'$\pi$', r'3$\pi$/2'])
-    ax_polar.set_yticks([0,.2, .4, .6, .8])
-    ax_polar.set_ylim([0,.8])
-    ax_polar.set_title(ts_dict['fly'])
-    ax_polar.legend()
-    fig_polar.tight_layout()
-    
-    return (fig_hist, ax_hist), (fig_polar, ax_polar)
+    return plotting.plot_heatmap_grid(_scan_traces(ts_dict), ts_dict['fly'], [15, 6], vmin, vmax,
+                                      plot_times, clip_times=False)
 
 
-def plot_sess_heatmaps_w_hist(ts_dict, bins = np.linspace(-np.pi, np.pi, num=17),vmin=-.5, vmax=3, 
-                              plot_times = np.arange(0, 360, 60), twindow = None, sess_order = (0,1,2)):
-    
-    fig = plt.figure(figsize=[8,6])
-    gs = GS(3,4, figure=fig, width_ratios=[6,1,.8, .2],wspace=.05,hspace=.8)
-    heatmap_axs = [fig.add_subplot(gs[0,0])]
-    heatmap_axs.extend([fig.add_subplot(gs[i,0],sharey=heatmap_axs[0]) for i in range(1,3)])
-    hist_axs = [fig.add_subplot(gs[0,1])]
-    hist_axs.extend([fig.add_subplot(gs[i,1],sharex=hist_axs[0]) for i in range(1,3)])
-    cbar_ax = [fig.add_subplot(gs[i,3]) for i in range(3)]
-    
-    def plot_row(key, row, cmap):
-        dff = ts_dict[key].dff
-        heading = ts_dict[key].heading
-        offset = ts_dict[key].offset
-        
-        time = ts_dict[key].time
+def plot_sess_histograms(ts_dict, bins=DEFAULT_OFFSET_BINS):
+    """Offset histogram and polar mean-vector plot for baseline, post_0deg and post_180deg.
 
-        if twindow is not None:
-            mask = (time>=twindow[0]) * (time<=twindow[1])
-        else:
-            mask = np.ones_like(time)>0
-        dff= dff[:,mask]
-        time = time[mask]
-        heading = heading[mask]
+    Args:
+        ts_dict: Dict with 'fly' and the timeseries objects of :func:`plot_sess_heatmaps`.
+        bins: Bins for the histogram.
 
-        x = np.arange(dff.shape[1])
-        heading_ = (heading + np.pi) / (2 * np.pi) * 15
-        h = heatmap_axs[row].imshow(dff, aspect='auto', cmap=cmap, interpolation='none', vmin=vmin, vmax=vmax)
-        fig.colorbar(h, cax=cbar_ax[row])
-        heatmap_axs[row].scatter(x, heading_, color='orange', s=5)
-
-        heatmap_axs[row].set_ylabel('ROIs')
-        heatmap_axs[row].set_yticks([-0.5,7.5,15.5], labels=[r'0', r'$\pi$', r'$2\pi$'])
-        heatmap_axs[row].yaxis.set_minor_locator(AutoMinorLocator())
-        
-        _plot_times = plot_times[plot_times<time.iloc[-1]]
-        heatmap_axs[row].set_xticks(get_time_tick_indices(time, _plot_times), labels=_plot_times)
-        heatmap_axs[row].set_xlabel('Time (s)')
-        
-        heatmap_axs[row].set_title(key)
-
-        
-      
-        centers = (bins[:-1] + bins[1:]) / 2
-        hist, _ = np.histogram(offset, bins=bins)
-        hist = hist / hist.sum()  # normalize
-       
-        hist_axs[row].fill_betweenx(centers, 0, hist, color=cmap(.8), alpha=.5)
-        
-        
-        hist_axs[row].set_yticks([-np.pi, 0,  np.pi], 
-                                 labels=[r'-$\pi$',  r'0', r'$\pi$'])
-        hist_axs[row].yaxis.set_minor_locator(AutoMinorLocator())
-        hist_axs[row].set_ylim([np.pi, -np.pi])
-        # hist_axs[row].set_xlim(left=0)
-        hist_axs[row].grid(True, axis='y', linestyle='-', alpha=0.8,linewidth=2.5, which='major')
-        ygridlines = hist_axs[row].get_ygridlines()
-        ygridlines[1].set_color('orange')
-        hist_axs[row].grid(True, axis='y', linestyle=':', alpha=0.5, linewidth=1.5, which='minor')
-        hist_axs[row].set_ylabel('Offset')
-        hist_axs[row].yaxis.tick_right()
-        hist_axs[row].yaxis.set_label_position('right')
-        hist_axs[row].set_xlabel('Prop.')
-        offset_len = np.abs(ts_dict[key].offset_c.mean())
-        hist_axs[row].set_title(f"vec length={offset_len:.2f}" )
-      
-
-        
+    Returns:
+        Tuple of ((fig_hist, ax_hist), (fig_polar, ax_polar)).
+    """
+    traces = _scan_traces(ts_dict)
+    traces[0].color = 'black'  # baseline; post-cue scans use their colormap
+    return plotting.plot_offset_histograms(traces, bins, hist_title=ts_dict['fly'],
+                                           polar_title=ts_dict['fly'], polar_ylim=[0, .8])
 
 
-    plot_row('baseline', sess_order[0], plt.cm.Greys)
-    plot_row('post_0deg', sess_order[1], plt.cm.PuRd)
-    plot_row('post_180deg', sess_order[2], plt.cm.GnBu)
-    
-    hist_axs[0].set_xlim(left=0)
-    fig.suptitle(ts_dict['fly'])
-    return fig, (heatmap_axs, hist_axs, cbar_ax)  # Return the figure and axes for further customization if needed
+def plot_sess_heatmaps_w_hist(ts_dict, bins=DEFAULT_OFFSET_BINS, vmin=-.5, vmax=3,
+                              plot_times=DEFAULT_PLOT_TIMES, twindow=None, sess_order=(0, 1, 2)):
+    """Heatmaps of baseline, post_0deg and post_180deg, each with its offset distribution.
+
+    Args:
+        ts_dict: Dict with 'fly' and the timeseries objects of :func:`plot_sess_heatmaps`.
+        bins: Bins for the offset histogram.
+        vmin, vmax: Color limits for heatmap.
+        plot_times: Time points (in seconds) to mark on x-axis.
+        twindow: Optional tuple (start_time, end_time) to limit data window.
+        sess_order: Row of the figure used for (baseline, post_0deg, post_180deg).
+
+    Returns:
+        Tuple of (figure, (heatmap_axs, hist_axs, cbar_ax)).
+    """
+    return plotting.plot_heatmaps_with_offset_hist(
+        _scan_traces(ts_dict), ts_dict['fly'], figsize=[8, 6], vmin=vmin, vmax=vmax,
+        plot_times=plot_times, twindow=twindow, bins=bins, slots=sess_order,
+        share_axes=True, hist_xlim_zero=True)
