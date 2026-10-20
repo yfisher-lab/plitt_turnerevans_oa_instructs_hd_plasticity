@@ -174,12 +174,11 @@ def offset_stats_plot(stats_df_unique, group_col=None):
 # ----------------------------------------------------------------------------
 # Statistics binned by heading velocity
 # ----------------------------------------------------------------------------
-def rho_stats(sess_df, load_row, dh_bins, meta_cols=None, outer_ring=False, **ts_kwargs):
+def rho_stats(session_manager, dh_bins, meta_cols=None, outer_ring=False, **ts_kwargs):
     """Compute PVA magnitude (rho) binned by absolute heading velocity.
 
     Args:
-        sess_df: Session DataFrame.
-        load_row: Callable to load preprocessed data.
+        session_manager: Session manager object.
         dh_bins: Bin edges for absolute heading velocity.
         meta_cols: Session-table columns copied to the result under the same names.
             Defaults to ``('fly_id', 'closed_loop')``.
@@ -194,8 +193,8 @@ def rho_stats(sess_df, load_row, dh_bins, meta_cols=None, outer_ring=False, **ts
     n_bins = len(dh_bins)
     rows = []
 
-    for _, row in sess_df.iterrows():
-        ts = session.GetTS(load_row(row), **ts_kwargs)
+    for _, row in session_manager.iterrows():
+        ts = session.GetTS(session_manager.load_row(row), **ts_kwargs)
         dh_dig = np.digitize(np.abs(ts.dh), dh_bins) - 1
 
         out = {**_meta(row, meta_cols), 'rho_dig': binned_mean(ts.rho, dh_dig, n_bins)}
@@ -224,15 +223,14 @@ def group_rho_stats(rho_stats, group_cols=('fly_id', 'closed_loop')):
         })).reset_index()
 
 
-def dphi_stats(sess_df, load_row, dh_bins, meta_cols=None, **ts_kwargs):
+def dphi_stats(session_manager, dh_bins, meta_cols=None, **ts_kwargs):
     """Compute PVA angular velocity binned by (signed) heading velocity.
 
     Measures how fast the population vector angle (PVA) rotates as a function of
     turning speed.
 
     Args:
-        sess_df: Session DataFrame.
-        load_row: Callable to load preprocessed data.
+        session_manager: Session manager object.
         dh_bins: Bin edges for heading velocity.
         meta_cols: Session-table columns copied to the result under the same names.
             Defaults to ``('fly_id', 'closed_loop')``.
@@ -247,8 +245,8 @@ def dphi_stats(sess_df, load_row, dh_bins, meta_cols=None, **ts_kwargs):
     n_bins = len(dh_bins)
     rows = []
 
-    for _, row in sess_df.iterrows():
-        ts = session.GetTS(load_row(row), **ts_kwargs)
+    for _, row in session_manager.iterrows():
+        ts = session.GetTS(session_manager.load_row(row), **ts_kwargs)
 
         # Compute velocities
         dh = np.diff(np.unwrap(ts.heading_sm)) / ts.dt

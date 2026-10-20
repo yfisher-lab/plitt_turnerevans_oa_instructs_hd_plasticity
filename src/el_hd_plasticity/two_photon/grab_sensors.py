@@ -60,27 +60,20 @@ def offset_stats_plot(stats_df_unique):
     return stats.offset_stats_plot(stats_df_unique)
 
 
-def rho_stats(sess_cls, dh_bins, dataframe=False, load_row=None):
+def rho_stats(session_manager, dh_bins):
     """Compute motor neuron and fluorescence activity binned by heading velocity.
 
     Computes mean rho (population vector magnitude) and outer ring
     fluorescence for each bin of absolute heading velocity.
 
     Args:
-        sess_cls: SessionManager or DataFrame with session data.
+        session_manager: Session manager object.
         dh_bins: Bin edges for heading velocity.
-        dataframe: If True, sess_cls is a DataFrame; if False, it's a SessionManager.
-        load_row: Callable to load data (required if dataframe=True).
 
     Returns:
         DataFrame with rho_dig and F_dig: arrays of mean values for each bin.
     """
-    if not dataframe:
-        sess_df, load_row = sess_cls.sess_df, sess_cls.load_row
-    else:
-        sess_df = sess_cls
-
-    return stats.rho_stats(sess_df, load_row, dh_bins, outer_ring=True)
+    return stats.rho_stats(session_manager, dh_bins, outer_ring=True)
 
 
 def reformat_rho_stats_for_reg(grouped_stats, dh_bins):

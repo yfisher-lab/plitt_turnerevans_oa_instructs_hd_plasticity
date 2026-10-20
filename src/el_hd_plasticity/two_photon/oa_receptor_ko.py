@@ -67,18 +67,17 @@ def offset_stats_plot(stats_df_unique):
     return stats.offset_stats_plot(stats_df_unique, group_col='condition')
 
 
-def rho_stats(sess_df, load_row, dh_bins):
+def rho_stats(session_manager, dh_bins):
     """Compute pva magnitude binned by heading velocity.
 
     Args:
-        sess_df: Session DataFrame.
-        load_row: Callable to load preprocessed data.
+        session_manager: Session manager object.
         dh_bins: Bin edges for heading velocity.
 
     Returns:
         DataFrame with rho_dig: array of mean rho values for each dh bin.
     """
-    return stats.rho_stats(sess_df, load_row, dh_bins, meta_cols=BINNED_META_COLS)
+    return stats.rho_stats(session_manager, dh_bins, meta_cols=BINNED_META_COLS)
 
 
 def reformat_rho_stats_for_reg(grouped_stats, dh_bins):
@@ -95,18 +94,17 @@ def reformat_rho_stats_for_reg(grouped_stats, dh_bins):
                                                meta_cols=REG_META_COLS)
 
 
-def dphi_stats(sess_df, load_row, dh_bins):
+def dphi_stats(session_manager, dh_bins):
     """Compute PVA angular velocity binned by heading velocity.
 
     Args:
-        sess_df: Session DataFrame.
-        load_row: Callable to load preprocessed data.
+        session_manager: Session manager object.
         dh_bins: Bin edges for heading velocity.
 
     Returns:
         DataFrame with dphi_dig: array of mean PVA velocity for each dh bin.
     """
-    return stats.dphi_stats(sess_df, load_row, dh_bins, meta_cols=BINNED_META_COLS)
+    return stats.dphi_stats(session_manager, dh_bins, meta_cols=BINNED_META_COLS)
 
 
 def reformat_dphi_stats_for_reg(grouped_stats, dh_bins):

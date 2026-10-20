@@ -57,15 +57,15 @@ def test_offset_stats_plot_is_wide_with_group_column(offsets, sess_df):
     assert {'offset_var_dark', 'offset_var_closed_loop', 'offset_mag_dark', 'offset_mag_closed_loop', 'rnai'} <= set(wide.columns)
 
 
-def test_rho_stats_bins_and_outer_ring(sess_df, load_row):
-    df = tp.stats.rho_stats(sess_df, load_row, BINS, outer_ring=True)
+def test_rho_stats_bins_and_outer_ring(sess_df, load_row, manager):
+    df = tp.stats.rho_stats(manager, BINS, outer_ring=True)
     assert {'rho_dig', 'F_dig'} <= set(df.columns)
     assert all(len(r) == len(BINS) for r in df['rho_dig'])
-    assert 'F_dig' not in tp.stats.rho_stats(sess_df, load_row, BINS).columns
+    assert 'F_dig' not in tp.stats.rho_stats(manager, BINS).columns
 
 
-def test_dphi_stats_bins(sess_df, load_row):
-    df = tp.stats.dphi_stats(sess_df, load_row, SIGNED_BINS)
+def test_dphi_stats_bins(sess_df, load_row, manager):
+    df = tp.stats.dphi_stats(manager, SIGNED_BINS)
     assert all(len(r) == len(SIGNED_BINS) for r in df['dphi_dig'])
 
 
@@ -94,14 +94,14 @@ def test_group_rho_stats_averages_sessions_per_fly_and_condition():
 
 
 @pytest.mark.parametrize('module, group', [(tp.tbh_rnai, 'rnai'), (tp.oa_receptor_ko, 'condition')])
-def test_experiment_wrappers_carry_group_column(module, group, sess_df, load_row):
+def test_experiment_wrappers_carry_group_column(module, group, sess_df, load_row, manager):
     offsets = module.offset_stats(sess_df, load_row)
     assert group in offsets.columns and 'dark' in offsets.columns
     assert group in module.offset_stats_unique(offsets).columns
-    rho = module.rho_stats(sess_df, load_row, BINS)
+    rho = module.rho_stats(manager, BINS)
     reg = module.reformat_rho_stats_for_reg(rho, BINS)
     assert list(reg.columns) == ['fly_id', group, 'dark', 'rho', 'dh']
-    dphi = module.dphi_stats(sess_df, load_row, SIGNED_BINS)
+    dphi = module.dphi_stats(manager, SIGNED_BINS)
     assert list(module.reformat_dphi_stats_for_reg(dphi, SIGNED_BINS).columns) == ['fly_id', group, 'dark', 'dphi', 'dh']
 
 
@@ -109,8 +109,8 @@ def test_tbh_requires_more_than_one_closed_loop_block_but_oa_does_not(sess_df, l
     assert tp.tbh_rnai.MIN_CL == 2 and tp.oa_receptor_ko.MIN_CL == 1
 
 
-def test_epg_silencing_rho_stats_columns(sess_df, load_row):
-    df = tp.epg_silencing.rho_stats(sess_df, load_row, BINS)
+def test_epg_silencing_rho_stats_columns(sess_df, load_row, manager):
+    df = tp.epg_silencing.rho_stats(manager, BINS)
     assert list(df.columns) == ['fly_id', 'scan_type', 'condition', 'rho_dig', 'F_dig']
 
 

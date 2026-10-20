@@ -86,6 +86,22 @@ def load_row():
     return lambda row: FakePP(seed=int(row['seed']), n=1500)
 
 
+class FakeManager:
+    """Minimal stand-in for ``SessionManager``: a session table plus a row loader."""
+
+    def __init__(self, sess_df, load_row):
+        self.sess_df = sess_df
+        self.load_row = load_row
+
+    def iterrows(self):
+        return self.sess_df.iterrows()
+
+
+@pytest.fixture
+def manager(sess_df, load_row):
+    return FakeManager(sess_df, load_row)
+
+
 @pytest.fixture(autouse=True)
 def _close_figures():
     yield
