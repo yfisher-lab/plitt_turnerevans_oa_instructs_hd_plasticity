@@ -253,7 +253,7 @@ def binned_stats_tests(figdir, reg_stats, dv):
 # ----------------------------------------------------------------------------
 # Example sessions
 # ----------------------------------------------------------------------------
-def plot_example_session(sess_manager, row_index, cmap, figdir, plot_times=np.arange(0, 361, 60)):
+def plot_example_session(sess_manager, row_index, cmap, figdir, plot_times=None):
     """Heading-aligned heatmap and first- vs second-half mean profile of one session.
 
     The mean profile of the first half of the session is rolled to put its peak at the center ROI; the
@@ -262,6 +262,8 @@ def plot_example_session(sess_manager, row_index, cmap, figdir, plot_times=np.ar
     Returns:
         Tuple of (fig_heatmap, fig_mean).
     """
+    if plot_times is None:
+        plot_times = np.arange(0, 361, 60)
     row = sess_manager.sess_df.iloc[row_index]
     fly_id = row['fly_id']
     sess = nmp.session.GetTS(sess_manager.load_row(row))
