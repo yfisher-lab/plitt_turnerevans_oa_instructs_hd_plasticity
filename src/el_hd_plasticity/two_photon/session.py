@@ -23,7 +23,7 @@ import numpy as np
 import scipy as sp
 import SessionTools.two_photon as st2p
 
-from . import ring_analysis
+from . import bump_shape
 from .utilities import HEADING_CENTER_ROI, heading_to_roi_index
 
 
@@ -127,11 +127,11 @@ def _align_to_heading(dff, heading):
 
 
 def _profile_widths(dff):
-    """FWHM of the mean peak-aligned profile (see :func:`ring_analysis.mean_profile_fwhm`): a float for
+    """FWHM of the mean peak-aligned profile (see :func:`bump_shape.mean_profile_fwhm`): a float for
     (n_rois, T) input, an array with one value per channel for (n_channels, n_rois, T)."""
     if dff.ndim > 2:
-        return np.array([ring_analysis.mean_profile_fwhm(channel) for channel in dff])
-    return ring_analysis.mean_profile_fwhm(dff)
+        return np.array([bump_shape.mean_profile_fwhm(channel) for channel in dff])
+    return bump_shape.mean_profile_fwhm(dff)
 
 
 def _smooth_activity(dff, dt, t_sigma, circ_sigma, neural_shift):

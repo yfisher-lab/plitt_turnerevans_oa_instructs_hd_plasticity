@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from el_hd_plasticity.two_photon import ring_analysis as ra
+from el_hd_plasticity.two_photon import bump_shape as ra
 
 N = 16
 ANGLES = np.linspace(-np.pi, np.pi, N, endpoint=False)
