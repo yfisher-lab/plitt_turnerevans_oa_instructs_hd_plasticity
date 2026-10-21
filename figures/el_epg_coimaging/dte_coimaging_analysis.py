@@ -14,26 +14,20 @@ import pickle
 import matplotlib
 import numpy as np
 import pandas as pd
-import scipy as sp
-from matplotlib import pyplot as plt
-
-import el_hd_plasticity.two_photon as nmp
 from el_epg_coimaging_analysis import (
     CHANNEL_COLORS,
     CHANNELS,
     CL_COLOR,
     DH_BINS,
     RHO_MIN,
-    _despine,
-    _jitter,
-    _mean_sem,
-    _wilcoxon_vs,
     bump_width_channel_tests,
-    paired_levels_plot,
+    paired_angle_plot,
     plot_bump_profiles_by_channel,
     pva_diff_vs_speed_plot,
-    save_tables,
 )
+from matplotlib import pyplot as plt
+
+import el_hd_plasticity.two_photon as nmp
 
 DATA_PATH = pathlib.Path('/media/mplitt/SSD_storage/2P_scratch/DTE_EL_EPG_dual_color/PreProcDat')
 DEFAULT_FIGDIR = pathlib.Path('/media/mplitt/SSD_storage/fig_scratch/DTE_EPG_EL_coimaging')
@@ -86,7 +80,7 @@ def plot_abs_offset_diff(figdir, data, channel_lookup):
     unique = unique[unique['cl'] == 1]
 
     df = unique.copy()
-    df['x'] = df['fly_id'].map(_jitter(df['fly_id'], width=.02))
+    df['x'] = df['fly_id'].map(nmp.utilities.fly_jitter(df['fly_id'], width=.02))
     fig, ax = plt.subplots(figsize=[1, 4])
     ax.scatter(df['x'], df['abs_offset_diff'], color='black', s=100, alpha=.4)
     ax.plot([-.05, .05], df['abs_offset_diff'].mean() * np.ones(2), color='black', linewidth=8)
@@ -97,10 +91,10 @@ def plot_abs_offset_diff(figdir, data, channel_lookup):
                   labels=['0', r'$\pi/4$', r'$\pi/2$', r'$3\pi/4$', r'$\pi$'])
     ax.set_xticks([0], labels=[r'$| \Delta$ offset $|$'])
     ax.set_ylabel(r'$| \Delta$ offset $|$')
-    _despine(ax, bottom=True)
+    nmp.plotting.despine(ax, bottom=True)
     fig.savefig(pathlib.Path(figdir) / 'PVA_diff_sns.pdf', bbox_inches='tight')
 
-    test = _wilcoxon_vs(unique['abs_offset_diff'], np.pi / 2)
+    test = nmp.stats.wilcoxon_vs(unique['abs_offset_diff'], np.pi / 2)
     test['dof'] = len(unique) - 1
     return fig, unique, test
 
@@ -132,7 +126,7 @@ def plot_bump_width(figdir, grouped, connect=True):
     """
     sel = grouped[grouped.groupby('fly_id')['channel'].transform('nunique') == len(CHANNELS)]
     fig, ax = plt.subplots(figsize=[2, 4])
-    paired_levels_plot(ax, sel, 'channel', [(c, name, CHANNEL_COLORS[name]) for c, name in enumerate(CHANNELS)],
+    paired_angle_plot(ax, sel, 'channel', [(c, name, CHANNEL_COLORS[name]) for c, name in enumerate(CHANNELS)],
                        'fwhm', BUMP_WIDTH_YLIM, connect)
     ax.set_ylabel('bump FWHM (rad)')
     fig.savefig(pathlib.Path(figdir) / 'bump_width_EL_v_EPG.pdf', bbox_inches='tight')
@@ -175,13 +169,13 @@ def plot_rho_vs_speed(figdir, grouped, dh_bins=DH_BINS):
     fig, ax = plt.subplots(figsize=[5, 5])
     for ch, name in enumerate(CHANNELS):
         col = f'rho{ch + 1}_dig'
-        mu, sem = _mean_sem(np.stack(grouped[col].loc[grouped[col]['cl'] == 1, col]))
+        mu, sem = nmp.utilities.mean_sem(np.stack(grouped[col].loc[grouped[col]['cl'] == 1, col]))
         ax.plot(centers, mu, color=CHANNEL_COLORS[name], label=name)
         ax.fill_between(centers, mu - sem, mu + sem, color=CHANNEL_COLORS[name], alpha=.4)
     ax.set_title('Closed loop')
     ax.set_ylabel('PV Magnitude')
     ax.set_xlabel('rot. speed (rad/s)')
-    _despine(ax)
+    nmp.plotting.despine(ax)
     ax.legend()
     fig.tight_layout()
     fig.savefig(pathlib.Path(figdir) / 'PV_magnitude_summary.pdf', format='pdf', bbox_inches='tight')
@@ -252,7 +246,7 @@ def main(data_path=DATA_PATH, figdir=DEFAULT_FIGDIR, trial_figures=True):
     if trial_figures:
         print(f'{plot_trial_heatmaps(figdir, data, channel_lookup)} trial figures')
 
-    save_tables(tables, figdir)
+    nmp.utilities.save_tables(tables, figdir)
     for name, table in tables.items():
         print(f'\n=== {name} ===\n{table}')
     return tables

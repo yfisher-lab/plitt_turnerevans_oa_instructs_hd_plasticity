@@ -9,7 +9,6 @@ condition key (e.g. ``'closed loop'``).
 """
 
 import numpy as np
-import scipy as sp
 from matplotlib import gridspec
 from matplotlib import pyplot as plt
 
@@ -39,7 +38,7 @@ def offset_stats_unique(stats_df):
     Reduces multiple sessions per condition to single values by averaging, creating
     one row per condition per fly (closed loop: ``closed_loop >= 1``, dark: ``closed_loop == 0``). Requires
     flies to have both closed-loop and dark data. Adds the circular variance of the offset
-    (``offset_var = 1 - offset_mag``, the mean over sessions) and its logit for mixed effects modeling.
+    (``offset_var = 1 - offset_mag``, see :func:`stats.add_offset_var`) and its logit for mixed effects modeling.
 
     Args:
         stats_df: Output from offset_stats().
@@ -48,10 +47,7 @@ def offset_stats_unique(stats_df):
         DataFrame with one row per condition per fly: fly_id, closed_loop (1 = closed loop, 0 =
         dark), dark, offset_mean, offset_mag, offset_var, offset_var_logit.
     """
-    unique = stats.offset_stats_unique(stats_df, dark_col=None)
-    unique['offset_var'] = 1 - unique['offset_mag']
-    unique['offset_var_logit'] = sp.special.logit(unique['offset_var'])
-    return unique
+    return stats.add_offset_var(stats.offset_stats_unique(stats_df, dark_col=None))
 
 
 def offset_stats_plot(stats_df_unique):

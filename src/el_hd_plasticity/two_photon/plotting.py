@@ -16,6 +16,7 @@ from typing import Any
 
 import numpy as np
 import scipy as sp
+import seaborn as sns
 from matplotlib import pyplot as plt
 from matplotlib.gridspec import GridSpec as GS
 from matplotlib.ticker import AutoMinorLocator
@@ -343,3 +344,40 @@ def plot_offset_histograms(traces, bins=DEFAULT_OFFSET_BINS, hist_title=None, po
     fig_polar.tight_layout()
 
     return (fig_hist, ax_hist), (fig_polar, ax_polar)
+
+
+# ----------------------------------------------------------------------------
+# Per-fly summary plots
+# ----------------------------------------------------------------------------
+def despine(ax, bottom=False):
+    """Hide the top and right spines of `ax` (and the bottom one if `bottom`)."""
+    for side in ('top', 'right', *(('bottom',) if bottom else ())):
+        ax.spines[side].set_visible(False)
+
+
+def paired_plot(ax, df, xcol, levels, ycol, connect=True):
+    """One value per fly at each of several x positions on `ax`, optionally joined by lines.
+
+    Points are colored by level and jittered horizontally per fly. The x-ticks, x-limits and spines are
+    set; y-label, y-limits and y-ticks are left to the caller.
+
+    Args:
+        df: Table with fly_id, `xcol` and `ycol`.
+        xcol: Column whose values are the x positions.
+        levels: List of ``(value of xcol, tick label, color)`` in x order.
+        ycol: Column plotted on the y axis.
+        connect: Join the points of each fly with a light line.
+    """
+    df = df.copy()
+    df['x'] = df[xcol].map({value: i for i, (value, _, _) in enumerate(levels)}) \
+        + df['fly_id'].map(utilities.fly_jitter(df['fly_id']))
+    if connect:
+        sns.lineplot(data=df, x='x', y=ycol, units='fly_id', estimator=None, color='black', zorder=-10,
+                     ax=ax, alpha=.3)
+    sns.scatterplot(data=df, x='x', y=ycol, hue=xcol, palette={value: color for value, _, color in levels},
+                    s=100, legend=False, ax=ax)
+    ax.set_xticks(range(len(levels)), labels=[label for _, label, _ in levels])
+    ax.set_xlabel('')
+    ax.set_ylabel('')
+    ax.set_xlim([-.15, len(levels) - 1 + .15])
+    despine(ax, bottom=True)

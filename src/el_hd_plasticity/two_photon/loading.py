@@ -103,6 +103,8 @@ class SessionManager:
         """
         self.basedir = pathlib.Path(basedir)
         self._sess_df = pd.read_csv(self.basedir / 'sessions.csv')
+        if 'session' not in self._sess_df.columns and 'sess' in self._sess_df.columns:
+            self._sess_df['session'] = self._sess_df['sess']      # some tables name the session folder 'sess'
         for col, value in (extra_cols or {}).items():
             self.sess_df[col] = value
 

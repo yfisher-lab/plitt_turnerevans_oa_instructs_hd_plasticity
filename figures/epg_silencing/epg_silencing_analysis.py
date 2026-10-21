@@ -10,14 +10,11 @@ Each fly is imaged at the permissive temperature (``scan_type`` = 'baseline', 25
 
 import argparse
 import pathlib
-import warnings
 
 import matplotlib
 import numpy as np
 import pandas as pd
 import pingouin as pg
-import scipy as sp
-import seaborn as sns
 from matplotlib import pyplot as plt
 
 import el_hd_plasticity.two_photon as nmp
@@ -43,33 +40,6 @@ def load_session_manager(basedir=BASEDIR, figdir=DEFAULT_FIGDIR):
     sess_manager = nmp.loading.SessionManager(basedir=basedir, figfolder=figdir, folder_cols=('condition',),
                                               id_cols=['condition'])
     return sess_manager
-
-
-def _despine(ax, bottom=False):
-    for side in ('top', 'right', *(('bottom',) if bottom else ())):
-        ax.spines[side].set_visible(False)
-
-
-def _jitter(fly_ids, width=.05, seed=0):
-    """Dict fly_id -> horizontal jitter so points of different flies don't overlap."""
-    fly_ids = pd.unique(fly_ids)
-    return dict(zip(fly_ids, np.random.default_rng(seed).uniform(-width, width, len(fly_ids)), strict=True))
-
-
-def _mean_sem(x):
-    """Mean and SEM over flies (axis 0), ignoring NaNs (bins without data)."""
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore', RuntimeWarning)
-        return np.nanmean(x, axis=0), sp.stats.sem(x, axis=0, nan_policy='omit')
-
-
-def save_tables(tables, figdir):
-    """Write every DataFrame of the dict `tables` to ``<figdir>/stats/<name>.csv``; return `tables`."""
-    folder = pathlib.Path(figdir) / 'stats'
-    folder.mkdir(exist_ok=True, parents=True)
-    for name, table in tables.items():
-        table.to_csv(folder / f'{name}.csv', index=False)
-    return tables
 
 
 # ----------------------------------------------------------------------------
@@ -103,12 +73,12 @@ def plot_rho_vs_speed(sess_manager, grouped, dh_bins=DH_BINS):
         sel = grouped.loc[grouped['condition'] == condition]
         for scan_type, color, linestyle, hatch, label in (
                 ('baseline', 'black', '-', None, '25C'), ('post_heat', plt.cm.Greys(.6), '--', '//', '33C')):
-            mu, sem = _mean_sem(np.stack(sel.loc[sel['scan_type'] == scan_type, 'rho_dig']))
+            mu, sem = nmp.utilities.mean_sem(np.stack(sel.loc[sel['scan_type'] == scan_type, 'rho_dig']))
             ax.plot(centers, mu, color=color, linewidth=5, linestyle=linestyle, label=label)
             ax.fill_between(centers, mu - sem, mu + sem, color=color, alpha=.3, hatch=hatch)
         ax.set_title(f'{title} (n={sel["fly_id"].nunique()})')
         ax.set_xlabel('Rot. Vel. (rad/s)')
-        _despine(ax)
+        nmp.plotting.despine(ax)
     axs[0].set_ylabel('PV magnitude')
     axs[0].legend()
     fig.tight_layout()
@@ -123,21 +93,14 @@ def plot_rho_mean(sess_manager, grouped):
     """Mean PV magnitude per fly at 25 vs 33 C: Gal4-only control | EPG > shi-ts."""
     grouped = complete_flies(grouped)
     fig, axs = plt.subplots(1, 2, sharey=True, figsize=[4, 4])
-    palette = {'baseline': BASELINE_COLOR, 'post_heat': HEAT_COLOR}
+    levels = [(scan_type, SCAN_LABELS[scan_type], color)
+              for scan_type, color in zip(SCAN_TYPES, (BASELINE_COLOR, HEAT_COLOR), strict=True)]
     for ax, (condition, title) in zip(axs, CONDITIONS.items(), strict=True):
         df = grouped.loc[grouped['condition'] == condition].copy()
-        df['x'] = df['scan_type'].map({s: i for i, s in enumerate(SCAN_TYPES)}) + df['fly_id'].map(_jitter(df['fly_id']))
-        sns.lineplot(data=df, x='x', y='rho_mean', units='fly_id', estimator=None, color='black', zorder=-10,
-                     ax=ax, alpha=.3)
-        sns.scatterplot(data=df, x='x', y='rho_mean', hue='scan_type', palette=palette, s=100, legend=False, ax=ax)
+        nmp.plotting.paired_plot(ax, df, 'scan_type', levels, 'rho_mean')
         ax.set_title(f'{title} (n={df["fly_id"].nunique()})', fontsize=9)
-        ax.set_xticks(range(len(SCAN_TYPES)), labels=[SCAN_LABELS[s] for s in SCAN_TYPES])
-        ax.set_xlabel('')
-        ax.set_ylabel('')
-        ax.set_xlim([-.15, 1.15])
         ax.set_ylim([0, 1])
         ax.set_yticks([0, .2, .4, .6, .8, 1.])
-        _despine(ax, bottom=True)
     axs[0].set_ylabel('PV magnitude')
     fig.tight_layout()
     fig.savefig(sess_manager.fig_folder / 'offset_mag_summary.pdf', format='pdf', bbox_inches='tight')
@@ -227,7 +190,7 @@ def main(basedir=BASEDIR, figdir=DEFAULT_FIGDIR, session_figures=True):
     if session_figures:
         print(f'{len(plot_session_figures(sess_manager))} flies with session figures')
 
-    save_tables(tables, sess_manager.fig_folder)
+    nmp.utilities.save_tables(tables, sess_manager.fig_folder)
     for name, table in tables.items():
         print(f'\n=== {name} ===\n{table}')
     return tables

@@ -58,42 +58,6 @@ def load_session_managers(da_basedir=DA_BASEDIR, oa_basedir=OA_BASEDIR, figdir=D
     }
 
 
-def _despine(ax, bottom=False):
-    for side in ('top', 'right', *(('bottom',) if bottom else ())):
-        ax.spines[side].set_visible(False)
-
-
-def _jitter(fly_ids, width=.05, seed=0):
-    """Dict fly_id -> horizontal jitter so paired points of different flies don't overlap."""
-    fly_ids = pd.unique(fly_ids)
-    return dict(zip(fly_ids, np.random.default_rng(seed).uniform(-width, width, len(fly_ids)), strict=True))
-
-
-def _mean_sem(x):
-    """Mean and SEM over flies (axis 0), ignoring NaNs (bins without data)."""
-    import warnings
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore', RuntimeWarning)
-        return np.nanmean(x, axis=0), sp.stats.sem(x, axis=0, nan_policy='omit')
-
-
-def _tidy(table):
-    """Pingouin tables carry list-valued columns that CSV handles poorly; stringify them."""
-    return table.map(lambda v: str(v) if isinstance(v, (list, tuple, np.ndarray)) else v)
-
-
-def save_tables(tables, figdir):
-    """Write every DataFrame of the nested dict `tables` to ``<figdir>/stats/<name>.csv``; return `tables`."""
-    folder = pathlib.Path(figdir) / 'stats'
-    folder.mkdir(exist_ok=True, parents=True)
-    for name, table in tables.items():
-        if isinstance(table, pd.DataFrame):
-            _tidy(table).to_csv(folder / f'{name}.csv', index=False)
-        elif isinstance(table, str):
-            (folder / f'{name}.txt').write_text(table)
-    return tables
-
-
 # ----------------------------------------------------------------------------
 # Offset statistics: offset variance and vector length, dark vs closed loop
 # ----------------------------------------------------------------------------
@@ -119,19 +83,10 @@ def plot_offset_summary(figdir, offset_unique, col, ylabel, ylim, filename):
     fig, axs = plt.subplots(1, len(GROUPS), sharey=True, figsize=[2 * len(GROUPS), 4])
     for ax, group in zip(axs, GROUPS, strict=True):
         df = offset_unique.loc[offset_unique['group'] == group].copy()
-        df['x'] = df['closed_loop'] + df['fly_id'].map(_jitter(df['fly_id']))
-        sns.lineplot(data=df, x='x', y=col, units='fly_id', estimator=None, color='black', zorder=-10,
-                     ax=ax, alpha=.3)
-        sns.scatterplot(data=df, x='x', y=col, hue='closed_loop', palette={0: DARK_COLOR, 1: CL_COLOR},
-                        s=100, legend=False, ax=ax)
+        nmp.plotting.paired_plot(ax, df, 'closed_loop', [(0, 'dark', DARK_COLOR), (1, 'closed loop', CL_COLOR)], col)
         ax.set_title(f'{group} (n={df["fly_id"].nunique()})')
-        ax.set_xticks([0, 1], labels=['dark', 'closed loop'])
-        ax.set_xlabel('')
-        ax.set_ylabel('')
-        ax.set_xlim([-.15, 1.15])
         ax.set_ylim(ylim)
         ax.set_yticks([0, .2, .4, .6, .8, 1.])
-        _despine(ax, bottom=True)
     axs[0].set_ylabel(ylabel)
     fig.tight_layout()
     fig.savefig(pathlib.Path(figdir) / filename, format='pdf', bbox_inches='tight')
@@ -202,11 +157,11 @@ def plot_binned_summary(figdir, grouped, col, ylabel, filename, dh_bins=DH_BINS)
         for group, (_, color) in GROUPS.items():
             df = grouped[group]
             dat = np.stack(df.loc[df['closed_loop'] == closed_loop, col])
-            mu, sem = _mean_sem(dat)
+            mu, sem = nmp.utilities.mean_sem(dat)
             ax.plot(centers, mu, color=color, label=group)
             ax.fill_between(centers, mu - sem, mu + sem, color=color, alpha=.4)
         ax.set_xlabel('rot. speed (rad/s)')
-        _despine(ax)
+        nmp.plotting.despine(ax)
     axs[0].set_title('Closed loop')
     axs[1].set_title('Dark')
     axs[0].set_ylabel(ylabel)
@@ -301,7 +256,7 @@ def plot_example_session(sess_manager, row_index, cmap, figdir, plot_times=None)
         ax.set_xticks([0, (n_rois - 1) / 2, n_rois - 1], labels=[r'-$\pi$', '0', r'$\pi$'])
         ax.set_ylabel('z-scored F')
         ax.set_xlabel('EB position (centered)')
-        _despine(ax)
+        nmp.plotting.despine(ax)
     axs[0].set_title('First half')
     axs[1].set_title('Second half')
     fig_mean.tight_layout()
@@ -380,7 +335,7 @@ def plot_split_half_alignment(figdir, halves):
         ax.set_title(name, fontsize=9)
         ax.set_xlabel('aligned ROIs')
         ax.set_xticks(nmp.plotting.ROI_TICKS, labels=nmp.plotting.ROI_TICK_LABELS)
-        _despine(ax)
+        nmp.plotting.despine(ax)
     axs[0].set_ylabel('z scored F')
     axs[0].legend()
     fig_average.tight_layout()
@@ -422,7 +377,7 @@ def main(da_basedir=DA_BASEDIR, oa_basedir=OA_BASEDIR, figdir=DEFAULT_FIGDIR, se
             n = plot_session_figures(sess_manager, GROUPS[group][0])
             print(f'{group}: {n} session figure sets')
 
-    save_tables(tables, figdir)
+    nmp.utilities.save_tables(tables, figdir)
     for name, table in tables.items():
         print(f'\n=== {name} ===\n{table}')
     return tables

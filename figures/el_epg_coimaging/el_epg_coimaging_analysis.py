@@ -18,9 +18,7 @@ import pathlib
 import matplotlib
 import numpy as np
 import pandas as pd
-import pingouin as pg
 import scipy as sp
-import seaborn as sns
 from matplotlib import pyplot as plt
 
 import el_hd_plasticity.two_photon as nmp
@@ -51,40 +49,6 @@ def load_session_manager(basedir=BASEDIR, figdir=DEFAULT_FIGDIR):
     return nmp.loading.SessionManager(basedir=basedir, figfolder=figdir)
 
 
-def _despine(ax, bottom=False):
-    for side in ('top', 'right', *(('bottom',) if bottom else ())):
-        ax.spines[side].set_visible(False)
-
-
-def _jitter(fly_ids, width=.05, seed=0):
-    """Dict fly_id -> horizontal jitter so points of different flies don't overlap."""
-    fly_ids = pd.unique(fly_ids)
-    return dict(zip(fly_ids, np.random.default_rng(seed).uniform(-width, width, len(fly_ids)), strict=True))
-
-
-def _mean_sem(x):
-    """Mean and SEM over flies (axis 0), ignoring NaNs (bins without data)."""
-    import warnings
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore', RuntimeWarning)
-        return np.nanmean(x, axis=0), sp.stats.sem(x, axis=0, nan_policy='omit')
-
-
-def _wilcoxon_vs(x, reference):
-    """Wilcoxon signed-rank test of `x` against a constant (or paired values) `reference`."""
-    W, p = sp.stats.wilcoxon(np.asarray(x, dtype=float) - reference)
-    return {'n': len(x), 'W': float(W), 'p': float(p)}
-
-
-def save_tables(tables, figdir):
-    """Write every DataFrame of the dict `tables` to ``<figdir>/stats/<name>.csv``; return `tables`."""
-    folder = pathlib.Path(figdir) / 'stats'
-    folder.mkdir(exist_ok=True, parents=True)
-    for name, table in tables.items():
-        table.to_csv(folder / f'{name}.csv', index=False)
-    return tables
-
-
 def merge_closed_loop(stats_df):
     """Count all closed-loop blocks as ``cl = 1`` (copy)."""
     stats_df = stats_df.copy()
@@ -98,18 +62,11 @@ def paired_dark_vs_cl_plot(df, ycol, ylabel, ylim=(0, np.pi), yticks=ANGLE_TICKS
     Args:
         df: Table with fly_id, ``cl`` (0 / 1) and `ycol`.
     """
-    df = df.copy()
-    df['x'] = df['cl'] + df['fly_id'].map(_jitter(df['fly_id']))
     fig, ax = plt.subplots(figsize=[2, 4])
-    sns.scatterplot(data=df, x='x', y=ycol, hue='cl', palette={0: DARK_COLOR, 1: CL_COLOR},
-                    s=100, legend=False, ax=ax)
-    ax.set_xticks([0, 1], labels=('dark', 'closed loop'))
-    ax.set_xlabel('')
+    nmp.plotting.paired_plot(ax, df, 'cl', [(0, 'dark', DARK_COLOR), (1, 'closed loop', CL_COLOR)], ycol, connect=False)
     ax.set_ylabel(ylabel)
-    ax.set_xlim([-.15, 1.15])
     ax.set_ylim(ylim)
     ax.set_yticks(yticks, labels=yticklabels)
-    _despine(ax, bottom=True)
     return fig, ax
 
 
@@ -120,7 +77,7 @@ def binned_vs_speed_plot(grouped, col, bins, ylabel, yticks=None, yticklabels=No
     fig, ax = plt.subplots(figsize=[5, 5])
     for cl, color, label in conditions:
         dat = np.stack(grouped.loc[grouped['cl'] == cl, col])
-        mu, sem = _mean_sem(dat)
+        mu, sem = nmp.utilities.mean_sem(dat)
         ax.plot(centers, mu, color=color, label=label)
         ax.fill_between(centers, mu - sem, mu + sem, color=color, alpha=.4)
     ax.set_xticks(np.linspace(-np.pi, np.pi, 9),
@@ -132,7 +89,7 @@ def binned_vs_speed_plot(grouped, col, bins, ylabel, yticks=None, yticklabels=No
         ax.set_ylim(ylim)
     ax.set_xlabel('rot. speed (rad/s)')
     ax.set_ylabel(ylabel)
-    _despine(ax)
+    nmp.plotting.despine(ax)
     ax.legend()
     return fig, ax
 
@@ -163,31 +120,13 @@ def pva_diff_vs_speed_plot(grouped_pvd, bins, conditions=((1, CL_COLOR, 'closed 
     return fig, stats
 
 
-def paired_levels_plot(ax, df, xcol, levels, ycol, ylim, connect=True):
-    """One value per fly at each of several x positions on `ax`, optionally joined by lines.
-
-    Args:
-        df: Table with fly_id, `xcol` and `ycol`.
-        xcol: Column whose values are the x positions.
-        levels: List of ``(value of xcol, tick label, color)`` in x order.
-        ylim: y-limits; y-ticks are the multiples of pi/4 inside them.
-        connect: Join the points of each fly with a light line.
-    """
-    df = df.copy()
-    df['x'] = df[xcol].map({value: i for i, (value, _, _) in enumerate(levels)}) + df['fly_id'].map(_jitter(df['fly_id']))
-    if connect:
-        sns.lineplot(data=df, x='x', y=ycol, units='fly_id', estimator=None, color='black', zorder=-10,
-                     ax=ax, alpha=.3)
-    sns.scatterplot(data=df, x='x', y=ycol, hue=xcol, palette={value: color for value, _, color in levels},
-                    s=100, legend=False, ax=ax)
-    ax.set_xticks(range(len(levels)), labels=[label for _, label, _ in levels])
-    ax.set_xlabel('')
-    ax.set_ylabel('')
-    ax.set_xlim([-.15, len(levels) - 1 + .15])
+def paired_angle_plot(ax, df, xcol, levels, ycol, ylim, connect=True):
+    """:func:`nmp.plotting.paired_plot` of an angle (radians), with y-ticks at the multiples of pi/4 inside `ylim`."""
+    nmp.plotting.paired_plot(ax, df, xcol, levels, ycol, connect)
     ax.set_ylim(ylim)
-    ticks = [(t, l) for t, l in zip(ANGLE_TICKS, ANGLE_TICK_LABELS, strict=True) if ylim[0] - 1e-9 <= t <= ylim[1] + 1e-9]
-    ax.set_yticks([t for t, _ in ticks], labels=[l for _, l in ticks])
-    _despine(ax, bottom=True)
+    ticks = [(tick, label) for tick, label in zip(ANGLE_TICKS, ANGLE_TICK_LABELS, strict=True)
+             if ylim[0] - 1e-9 <= tick <= ylim[1] + 1e-9]
+    ax.set_yticks([tick for tick, _ in ticks], labels=[label for _, label in ticks])
 
 
 def plot_bump_profiles_by_channel(grouped, cl_levels, normalize_rows=True, raw_label='z-scored dF/F'):
@@ -210,7 +149,7 @@ def plot_bump_profiles_by_channel(grouped, cl_levels, normalize_rows=True, raw_l
             ax = axs[r, c]
             for channel, name in enumerate(CHANNELS):
                 sel = grouped.loc[(grouped['cl'] == cl) & (grouped['channel'] == channel)]
-                mu, sem = _mean_sem(transform(np.stack(sel['profile'])))
+                mu, sem = nmp.utilities.mean_sem(transform(np.stack(sel['profile'])))
                 x = np.arange(mu.size) - mu.size // 2
                 ax.plot(x, mu, color=CHANNEL_COLORS[name], linewidth=3, label=f'{name} (n={len(sel)})')
                 ax.fill_between(x, mu - sem, mu + sem, color=CHANNEL_COLORS[name], alpha=.3)
@@ -218,18 +157,10 @@ def plot_bump_profiles_by_channel(grouped, cl_levels, normalize_rows=True, raw_l
             ax.set_xlabel('ROI relative to PVA' if r == len(rows) - 1 else '')
             if r == 0:
                 ax.set_title(title)
-            _despine(ax)
+            nmp.plotting.despine(ax)
     axs[0, 0].legend()
     fig.tight_layout()
     return fig
-
-
-def _holm(tests, mask=None):
-    """Add Holm-corrected p-values (across the rows selected by `mask`) as ``p_holm`` to the test table."""
-    mask = np.ones(len(tests), dtype=bool) if mask is None else mask
-    tests['p_holm'] = np.nan
-    tests.loc[mask, 'p_holm'] = pg.multicomp(tests.loc[mask, 'p'].to_numpy(), method='holm')[1]
-    return tests
 
 
 def bump_width_channel_tests(grouped, conditions):
@@ -242,9 +173,9 @@ def bump_width_channel_tests(grouped, conditions):
     rows = []
     for cl, name in conditions:
         wide = grouped.loc[grouped['cl'] == cl].pivot(index='fly_id', columns='channel', values='fwhm').dropna()
-        rows.append({'condition': name, 'comparison': 'EL vs EPG', **_wilcoxon_vs(wide[1], wide[0].to_numpy()),
+        rows.append({'condition': name, 'comparison': 'EL vs EPG', **nmp.stats.wilcoxon_vs(wide[1], wide[0].to_numpy()),
                      'median_diff': float(np.median(wide[1] - wide[0]))})
-    return _holm(pd.DataFrame(rows))
+    return nmp.stats.add_holm(pd.DataFrame(rows))
 
 
 # ----------------------------------------------------------------------------
@@ -278,7 +209,7 @@ def plot_bump_width_by_channel(sess_manager, grouped, connect=True):
     for ax, (cl, name) in zip(axs, conditions, strict=True):
         sel = grouped.loc[grouped['cl'] == cl]
         sel = sel[sel.groupby('fly_id')['channel'].transform('nunique') == len(CHANNELS)]
-        paired_levels_plot(ax, sel, 'channel', levels, 'fwhm', BUMP_WIDTH_YLIM, connect)
+        paired_angle_plot(ax, sel, 'channel', levels, 'fwhm', BUMP_WIDTH_YLIM, connect)
         ax.set_title(f'{name} (n={sel["fly_id"].nunique()})', fontsize=9)
     axs[0].set_ylabel('bump FWHM (rad)')
     fig.tight_layout()
@@ -298,15 +229,15 @@ def plot_bump_width_by_condition(sess_manager, grouped, connect=True):
     for ax, (channel, name) in zip(axs, enumerate(CHANNELS), strict=True):
         sel = grouped.loc[grouped['channel'] == channel]
         sel = sel[sel.groupby('fly_id')['cl'].transform('nunique') == 2]
-        paired_levels_plot(ax, sel, 'cl', levels, 'fwhm', BUMP_WIDTH_YLIM, connect)
+        paired_angle_plot(ax, sel, 'cl', levels, 'fwhm', BUMP_WIDTH_YLIM, connect)
         ax.set_title(f'{name} (n={sel["fly_id"].nunique()})', fontsize=9)
         wide = sel.pivot(index='fly_id', columns='cl', values='fwhm')
-        rows.append({'channel': name, 'comparison': 'closed loop vs dark', **_wilcoxon_vs(wide[1], wide[0].to_numpy()),
+        rows.append({'channel': name, 'comparison': 'closed loop vs dark', **nmp.stats.wilcoxon_vs(wide[1], wide[0].to_numpy()),
                      'median_diff': float(np.median(wide[1] - wide[0]))})
     axs[0].set_ylabel('bump FWHM (rad)')
     fig.tight_layout()
     fig.savefig(sess_manager.fig_folder / 'bump_width_dark_v_closed_loop.pdf', bbox_inches='tight')
-    return fig, _holm(pd.DataFrame(rows))
+    return fig, nmp.stats.add_holm(pd.DataFrame(rows))
 
 
 # ----------------------------------------------------------------------------
@@ -338,14 +269,13 @@ def plot_pva_diff(sess_manager, offset_unique):
     rows = []
     for condition, mask in (('closed loop', cl), ('dark', ~cl)):
         pva_diff = offset_unique.loc[mask, 'pva_diff']
-        rows.append({'condition': condition, 'reference': 'chance (pi/2)', **_wilcoxon_vs(pva_diff, np.pi / 2)})
+        rows.append({'condition': condition, 'reference': 'chance (pi/2)', **nmp.stats.wilcoxon_vs(pva_diff, np.pi / 2)})
         for name, width in widths.items():
             rows.append({'condition': condition, 'reference': f'{name} FWHM (closed loop mean)',
-                         **_wilcoxon_vs(pva_diff, width)})
+                         **nmp.stats.wilcoxon_vs(pva_diff, width)})
     tests = pd.DataFrame(rows)
     chance = tests['reference'] == 'chance (pi/2)'
-    tests['p_holm_chance'] = np.nan
-    tests.loc[chance, 'p_holm_chance'] = pg.multicomp(tests.loc[chance, 'p'].to_numpy(), method='holm')[1]
+    tests = nmp.stats.add_holm(tests, chance).rename(columns={'p_holm': 'p_holm_chance'})
     return fig, tests
 
 
@@ -397,11 +327,11 @@ def plot_rho_vs_speed(sess_manager, grouped, dh_bins=DH_BINS):
         for ch, name in enumerate(CHANNELS):
             col = f'rho{ch + 1}_dig'
             dat = np.stack(grouped[col].loc[grouped[col]['cl'] == cl, col])
-            mu, sem = _mean_sem(dat)
+            mu, sem = nmp.utilities.mean_sem(dat)
             ax.plot(centers, mu, color=CHANNEL_COLORS[name], label=name)
             ax.fill_between(centers, mu - sem, mu + sem, color=CHANNEL_COLORS[name], alpha=.4)
         ax.set_xlabel('rot. speed (rad/s)')
-        _despine(ax)
+        nmp.plotting.despine(ax)
     axs[0].set_title('Closed loop')
     axs[1].set_title('Dark')
     axs[0].set_ylabel('PV Magnitude')
@@ -428,13 +358,13 @@ def plot_pva_diff_vs_pv_magnitude(sess_manager, pv_bins=PV_BINS):
     centers = pv_bins + np.diff(pv_bins)[0] / 2
     fig, ax = plt.subplots(figsize=[5, 5])
     for cl, color, label in ((1, CL_COLOR, 'closed loop'), (0, DARK_COLOR, 'dark')):
-        mu, sem = _mean_sem(np.stack(grouped.loc[grouped['cl'] == cl, 'pva_diff']))
+        mu, sem = nmp.utilities.mean_sem(np.stack(grouped.loc[grouped['cl'] == cl, 'pva_diff']))
         ax.plot(centers, mu, color=color, label=label)
         ax.fill_between(centers, mu - sem, mu + sem, color=color, alpha=.4)
     ax.set_yticks(ANGLE_TICKS, labels=ANGLE_TICK_LABELS)
     ax.set_ylabel(r'$| \Delta$ PVA $|$')
     ax.set_xlabel(r'$\| PV \|_2$')
-    _despine(ax)
+    nmp.plotting.despine(ax)
     ax.legend()
     fig.tight_layout()
     fig.savefig(sess_manager.fig_folder / 'deltaPVA_PV_magnitude_summary.pdf', format='pdf', bbox_inches='tight')
@@ -501,7 +431,7 @@ def main(basedir=BASEDIR, figdir=DEFAULT_FIGDIR, session_figures=True):
     if session_figures:
         print(f'{plot_session_figures(sess_manager)} session figure sets')
 
-    save_tables(tables, sess_manager.fig_folder)
+    nmp.utilities.save_tables(tables, sess_manager.fig_folder)
     for name, table in tables.items():
         print(f'\n=== {name} ===\n{table}')
     return tables

@@ -5,7 +5,12 @@ no dependency on a particular experiment. Experiment-specific analysis lives in 
 sibling modules; figure helpers live in :mod:`plotting`.
 """
 
+import pathlib
+import warnings
+
 import numpy as np
+import pandas as pd
+import scipy as sp
 
 # Number of ROIs (wedges) the ellipsoid body is divided into in this dataset, and the
 # ROI index heading is rolled to when aligning activity to heading.
@@ -134,3 +139,35 @@ def print_nested_keys(data, indent=0):
         for key, value in data.items():
             print("  " * indent + str(key))
             print_nested_keys(value, indent + 1)
+
+
+# ----------------------------------------------------------------------------
+# Helpers for the per-fly summaries and result tables of the figure scripts
+# ----------------------------------------------------------------------------
+def mean_sem(x):
+    """Mean and SEM over the first axis (e.g. flies), ignoring NaNs (bins without data)."""
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        return np.nanmean(x, axis=0), sp.stats.sem(x, axis=0, nan_policy='omit')
+
+
+def fly_jitter(fly_ids, width=.05, seed=0):
+    """Dict fly_id -> horizontal jitter, so points of different flies at the same x don't overlap."""
+    fly_ids = pd.unique(np.asarray(fly_ids))
+    return dict(zip(fly_ids, np.random.default_rng(seed).uniform(-width, width, len(fly_ids)), strict=True))
+
+
+def save_tables(tables, figdir):
+    """Write the DataFrames (as CSV) and strings (as text) of the dict `tables` to ``<figdir>/stats/<name>``.
+
+    List-valued cells (as in pingouin tables) are written as strings. Returns `tables`.
+    """
+    folder = pathlib.Path(figdir) / 'stats'
+    folder.mkdir(exist_ok=True, parents=True)
+    for name, table in tables.items():
+        if isinstance(table, pd.DataFrame):
+            table.map(lambda v: str(v) if isinstance(v, (list, tuple, np.ndarray)) else v).to_csv(
+                folder / f'{name}.csv', index=False)
+        elif isinstance(table, str):
+            (folder / f'{name}.txt').write_text(table)
+    return tables

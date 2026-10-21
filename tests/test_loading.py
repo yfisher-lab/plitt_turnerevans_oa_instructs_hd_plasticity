@@ -79,3 +79,11 @@ def test_numeric_dates_and_values_are_stringified(tmp_path):
     (tmp_path / 'sessions.csv').write_text('date,fly,session,usable,dark\n20240101,7,s1,1,0\n')
     sm = loading.SessionManager(tmp_path, figfolder=tmp_path / 'figs', id_cols=['dark'])
     assert list(sm.fly_ids) == ['20240101_7_dark_0']
+
+
+def test_session_manager_aliases_a_sess_column_to_session(tmp_path):
+    import pandas as pd
+    pd.DataFrame({'date': ['d'], 'fly': ['f'], 'sess': ['s-000'], 'closed_loop': [1], 'usable': [1]}).to_csv(
+        tmp_path / 'sessions.csv', index=False)
+    manager = tp.loading.SessionManager(basedir=tmp_path)
+    assert manager.sess_df['session'].tolist() == ['s-000']

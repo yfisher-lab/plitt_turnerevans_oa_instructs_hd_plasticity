@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+import scipy as sp
 
 import el_hd_plasticity.two_photon as tp
 
@@ -9,19 +10,19 @@ SIGNED_BINS = np.array([-4, -2, -1, -.5, 0, .5, 1, 2, 4])
 
 
 @pytest.fixture
-def offsets(sess_df, load_row):
-    return tp.stats.offset_stats(sess_df, load_row)
+def offsets(manager):
+    return tp.stats.offset_stats(manager)
 
 
 def test_offset_stats_has_one_row_per_session(offsets, sess_df):
     assert len(offsets) == len(sess_df)
-    assert list(offsets.columns) == ['fly_id', 'closed_loop', 'offset_var', 'offset_mean', 'offset_mag']
+    assert list(offsets.columns) == ['fly_id', 'closed_loop', 'offset_mean', 'offset_mag']
     assert offsets['offset_mag'].between(0, 1).all()
     assert offsets['offset_mean'].abs().le(np.pi).all()
 
 
-def test_offset_stats_meta_cols_are_copied_in_order_under_their_own_names(sess_df, load_row):
-    df = tp.stats.offset_stats(sess_df, load_row, meta_cols=('rnai', 'fly_id'))
+def test_offset_stats_meta_cols_are_copied_in_order_under_their_own_names(manager):
+    df = tp.stats.offset_stats(manager, meta_cols=('rnai', 'fly_id'))
     assert list(df.columns)[:2] == ['rnai', 'fly_id']
 
 
@@ -31,16 +32,25 @@ def test_offset_stats_unique_aggregates_closed_loop_and_dark(offsets, sess_df):
     assert len(uniq) == 2 * sess_df['fly_id'].nunique()
     assert set(uniq['closed_loop']) == {0, 1} and set(uniq['dark']) == {0, 1}
     cl = uniq[(uniq['fly_id'] == 'fly0') & (uniq['closed_loop'] == 1)].iloc[0]
-    expected = both[(both['fly_id'] == 'fly0') & (both['closed_loop'] >= 1)]['offset_var'].mean()
-    assert np.isclose(cl['offset_var'], expected)
-    assert np.isclose(cl['offset_var_logit'], np.log(expected / (1 - expected)))
+    expected = both[(both['fly_id'] == 'fly0') & (both['closed_loop'] >= 1)]['offset_mag'].mean()
+    assert np.isclose(cl['offset_mag'], expected)
+    with_var = tp.stats.add_offset_var(uniq)
+    cl = with_var[(with_var['fly_id'] == 'fly0') & (with_var['closed_loop'] == 1)].iloc[0]
+    assert np.isclose(cl['offset_var'], 1 - expected)
+    assert np.isclose(cl['offset_var_logit'], np.log((1 - expected) / expected))
+
+
+def test_offset_var_is_circular_variance_of_the_offset(manager, sess_df, load_row):
+    df = tp.stats.add_offset_var(tp.stats.offset_stats(manager))
+    ts = tp.session.GetTS(load_row(sess_df.iloc[0]))
+    assert np.isclose(df['offset_var'].iloc[0], sp.stats.circvar(ts.offset))
 
 
 def test_offset_stats_unique_min_cl_and_missing_condition(offsets, sess_df):
     both = offsets.assign(dark=sess_df['dark'].values)
     strict = tp.stats.offset_stats_unique(both, min_cl=2)
     cl = strict[(strict['fly_id'] == 'fly0') & (strict['closed_loop'] == 1)].iloc[0]
-    assert np.isclose(cl['offset_var'], both[(both['fly_id'] == 'fly0') & (both['closed_loop'] == 2)]['offset_var'].iloc[0])
+    assert np.isclose(cl['offset_mag'], both[(both['fly_id'] == 'fly0') & (both['closed_loop'] == 2)]['offset_mag'].iloc[0])
     no_dark = both[both['dark'] == 0]
     assert tp.stats.offset_stats_unique(no_dark).empty
 
@@ -54,7 +64,7 @@ def test_offset_stats_plot_is_wide_with_group_column(offsets, sess_df):
     both = offsets.assign(dark=sess_df['dark'].values, rnai=sess_df['rnai'].values)
     wide = tp.stats.offset_stats_plot(tp.stats.offset_stats_unique(both, group_col='rnai'), group_col='rnai')
     assert len(wide) == sess_df['fly_id'].nunique()
-    assert {'offset_var_dark', 'offset_var_closed_loop', 'offset_mag_dark', 'offset_mag_closed_loop', 'rnai'} <= set(wide.columns)
+    assert {'offset_mag_dark', 'offset_mag_closed_loop', 'rnai'} <= set(wide.columns)
 
 
 def test_rho_stats_bins_and_outer_ring(sess_df, load_row, manager):
@@ -94,10 +104,11 @@ def test_group_rho_stats_averages_sessions_per_fly_and_condition():
 
 
 @pytest.mark.parametrize('module, group', [(tp.tbh_rnai, 'rnai'), (tp.oa_receptor_ko, 'condition')])
-def test_experiment_wrappers_carry_group_column(module, group, sess_df, load_row, manager):
-    offsets = module.offset_stats(sess_df, load_row)
+def test_experiment_wrappers_carry_group_column(module, group, manager):
+    offsets = module.offset_stats(manager)
     assert group in offsets.columns and 'dark' in offsets.columns
-    assert group in module.offset_stats_unique(offsets).columns
+    unique = module.offset_stats_unique(offsets)
+    assert group in unique.columns and {'offset_var', 'offset_var_logit'} <= set(unique.columns)
     rho = module.rho_stats(manager, BINS)
     reg = module.reformat_rho_stats_for_reg(rho, BINS)
     assert list(reg.columns) == ['fly_id', group, 'dark', 'rho', 'dh']
@@ -116,24 +127,24 @@ def test_epg_silencing_rho_stats_columns(sess_df, load_row, manager):
 
 # --- multi-channel offset statistics (channels are the first dimension of ts.offset_c) -------------
 @pytest.fixture
-def two_channel(sess_df, load_row):
-    return tp.stats.offset_stats(sess_df, load_row, channels=[0, 1])
+def two_channel(manager):
+    return tp.stats.offset_stats(manager, channels=[0, 1])
 
 
 def test_offset_stats_multichannel_gives_one_row_per_session_per_channel(two_channel, sess_df):
     assert len(two_channel) == 2 * len(sess_df)
-    assert list(two_channel.columns) == ['fly_id', 'closed_loop', 'channel', 'offset_var', 'offset_mean', 'offset_mag']
+    assert list(two_channel.columns) == ['fly_id', 'closed_loop', 'channel', 'offset_mean', 'offset_mag']
     assert set(two_channel['channel']) == {0, 1}
     # sessions stay in order, channels alternate within a session
     assert two_channel['channel'].tolist()[:4] == [0, 1, 0, 1]
 
 
-def test_offset_stats_multichannel_matches_single_channel_runs(two_channel, sess_df, load_row):
+def test_offset_stats_multichannel_matches_single_channel_runs(two_channel, manager):
     for ch in (0, 1):
-        single = tp.stats.offset_stats(sess_df, load_row, channels=ch)
+        single = tp.stats.offset_stats(manager, channels=ch)
         assert 'channel' not in single.columns
         got = two_channel[two_channel['channel'] == ch].reset_index(drop=True)
-        for col in ('offset_var', 'offset_mean', 'offset_mag'):
+        for col in ('offset_mean', 'offset_mag'):
             np.testing.assert_allclose(got[col], single[col], atol=1e-12)
 
 
@@ -147,8 +158,8 @@ def test_offset_stats_unique_and_plot_work_per_channel(two_channel, sess_df):
     assert len(uniq) == 2 * 2 * sess_df['fly_id'].nunique()          # fly x channel x (closed loop, dark)
     assert set(uniq['channel']) == {0, 1}
     ch1 = uniq[(uniq['fly_id'] == 'fly0') & (uniq['channel'] == 1) & (uniq['closed_loop'] == 1)].iloc[0]
-    expected = both[(both['fly_id'] == 'fly0') & (both['channel'] == 1) & (both['closed_loop'] >= 1)]['offset_var'].mean()
-    assert np.isclose(ch1['offset_var'], expected)
+    expected = both[(both['fly_id'] == 'fly0') & (both['channel'] == 1) & (both['closed_loop'] >= 1)]['offset_mag'].mean()
+    assert np.isclose(ch1['offset_mag'], expected)
     wide = tp.stats.offset_stats_plot(uniq)
     assert len(wide) == 2 * sess_df['fly_id'].nunique() and set(wide['channel']) == {0, 1}
 
@@ -161,3 +172,11 @@ def test_bump_stats_and_group_bump_stats(manager):
     assert len(g) == manager.sess_df[['fly_id', 'closed_loop']].drop_duplicates().shape[0]
     assert all(np.argmax(p) == len(p) // 2 for p in g['profile'])
     assert (g['fwhm'].dropna() > 0).all()
+
+
+def test_wilcoxon_vs_constant_and_paired_and_holm():
+    x = np.arange(1., 11.)
+    assert tp.stats.wilcoxon_vs(x, 0)['n'] == 10 and tp.stats.wilcoxon_vs(x, 0)['p'] < .01
+    assert np.isclose(tp.stats.wilcoxon_vs(x, x[::-1])['p'], sp.stats.wilcoxon(x, x[::-1]).pvalue)
+    tests = tp.stats.add_holm(pd.DataFrame({'p': [.01, .04, .5]}), mask=np.array([True, True, False]))
+    assert np.allclose(tests['p_holm'][:2], [.02, .04]) and np.isnan(tests['p_holm'][2])

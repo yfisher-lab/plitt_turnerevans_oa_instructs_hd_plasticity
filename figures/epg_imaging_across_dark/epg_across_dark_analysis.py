@@ -14,12 +14,10 @@ first closed-loop session and treat the later ones as "closed loop" (see :func:`
 import argparse
 import json
 import pathlib
-import warnings
 
 import matplotlib
 import numpy as np
 import pandas as pd
-import scipy as sp
 import seaborn as sns
 from matplotlib import pyplot as plt
 
@@ -61,43 +59,12 @@ def merge_closed_loop(stats_df):
     return stats_df
 
 
-def _jitter(fly_ids, width=.05, seed=0):
-    """Dict fly_id -> horizontal jitter so paired points of different flies don't overlap."""
-    fly_ids = pd.unique(fly_ids)
-    return dict(zip(fly_ids, np.random.default_rng(seed).uniform(-width, width, len(fly_ids)), strict=True))
-
-
-def _despine(ax, bottom=True):
-    for side in ('top', 'right', *(('bottom',) if bottom else ())):
-        ax.spines[side].set_visible(False)
-
-
-def _mean_sem(x):
-    """Mean and SEM over flies (axis 0), ignoring NaNs (bins without data)."""
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore', RuntimeWarning)
-        return np.nanmean(x, axis=0), sp.stats.sem(x, axis=0, nan_policy='omit')
-
-
-def _wilcoxon(a, b):
-    W, p = sp.stats.wilcoxon(np.asarray(a, dtype=float), np.asarray(b, dtype=float))
-    return {'n': len(a), 'W': float(W), 'p': float(p)}
-
-
 def _paired_dark_vs_cl_plot(df, ycol, ylabel):
     """Dark (x=0) vs closed loop (x=1) value per fly, joined by lines. `df` needs fly_id, closed_loop, `ycol`."""
-    df = df.copy()
-    df['x'] = df['closed_loop'] + df['fly_id'].map(_jitter(df['fly_id']))
     fig, ax = plt.subplots(figsize=[2, 4])
-    sns.lineplot(data=df, x='x', y=ycol, units='fly_id', estimator=None, color='black', zorder=-10,
-                 ax=ax, alpha=.3)
-    sns.scatterplot(data=df, x='x', y=ycol, hue='closed_loop', palette={0: DARK_COLOR, 1: CL_COLOR},
-                    s=100, legend=False, ax=ax)
-    ax.set_xticks([0, 1], labels=('dark', 'closed loop'))
+    nmp.plotting.paired_plot(ax, df, 'closed_loop', [(0, 'dark', DARK_COLOR), (1, 'closed loop', CL_COLOR)],
+                             ycol)
     ax.set_ylabel(ylabel)
-    ax.set_xlabel('')
-    ax.set_xlim([-.15, 1.15])
-    _despine(ax)
     return fig, ax
 
 
@@ -106,12 +73,12 @@ def _binned_dark_vs_cl_plot(grouped, col, bins, xlabel, ylabel, linewidth=None, 
     fig, ax = plt.subplots(figsize=[5, 5])
     for closed_loop, color, label in ((1, CL_COLOR, 'closed loop'), (0, DARK_COLOR, 'dark')):
         dat = np.stack(grouped.loc[grouped['closed_loop'] == closed_loop, col])
-        mu, sem = _mean_sem(dat)
+        mu, sem = nmp.utilities.mean_sem(dat)
         ax.plot(bins, mu, color=color, linewidth=linewidth, label=label)
         ax.fill_between(bins, mu - sem, mu + sem, color=color, alpha=alpha)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
-    _despine(ax, bottom=False)
+    nmp.plotting.despine(ax)
     fig.legend()
     return fig, ax
 
@@ -137,7 +104,7 @@ def plot_offset_summary(sess_manager, offset_stats):
     fig.savefig(sess_manager.fig_folder / 'PVA_mag_dark_v_closed_loop.pdf', bbox_inches='tight')
 
     wide = unique.pivot(index='fly_id', columns='closed_loop', values='offset_mag').dropna()
-    return fig, _wilcoxon(wide[0], wide[1])
+    return fig, nmp.stats.wilcoxon_vs(wide[0], wide[1])
 
 
 def _offset_wide(offset_stats):
@@ -161,7 +128,7 @@ def plot_offset_stability(sess_manager, offset_stats):
     plot_wide[2] = np.take_along_axis(cl_2_expand, nearest, axis=-1)[:, 0]
 
     df = plot_wide.reset_index().melt(id_vars='fly_id', var_name='closed_loop', value_name='offset_mean')
-    df['x'] = df['closed_loop'] - 1 + df['fly_id'].map(_jitter(df['fly_id']))
+    df['x'] = df['closed_loop'] - 1 + df['fly_id'].map(nmp.utilities.fly_jitter(df['fly_id']))
 
     fig_offsets, ax = plt.subplots(figsize=[2, 4])
     sns.lineplot(data=df, x='x', y='offset_mean', units='fly_id', estimator=None, color='black',
@@ -174,11 +141,11 @@ def plot_offset_stability(sess_manager, offset_stats):
     ax.set_yticks([-np.pi, -np.pi / 2, 0, np.pi / 2, np.pi],
                   labels=[r"-$\pi$", r"-$\pi$/2", 0, r"$\pi$/2", r"$\pi$"])
     ax.set_xlim([-.15, 1.15])
-    _despine(ax)
+    nmp.plotting.despine(ax, bottom=True)
     fig_offsets.savefig(sess_manager.fig_folder / 'offset_cl1_v_cl2.pdf', bbox_inches='tight')
 
     diff = pd.Series(np.abs(np.angle(np.exp(1j * (wide[1] - wide[2])))), index=wide.index)   # per fly
-    diff_df = pd.DataFrame({'diff': diff, 'x': diff.index.map(_jitter(diff.index, width=.02))}, index=diff.index)
+    diff_df = pd.DataFrame({'diff': diff, 'x': diff.index.map(nmp.utilities.fly_jitter(diff.index, width=.02))}, index=diff.index)
 
     fig_change, ax = plt.subplots(figsize=[1, 4])
     sns.scatterplot(data=diff_df, x='x', y='diff', color='black', s=100, legend=False, alpha=.4, ax=ax)
@@ -188,7 +155,7 @@ def plot_offset_stability(sess_manager, offset_stats):
                   labels=[0, r"$\pi$/4", r"$\pi$/2", r"$3\pi$/4", r"$\pi$"])
     ax.set_xticks([.0], labels=[r'$| \Delta \theta |$'])
     ax.set_ylabel(r'$| \Delta $  offset $|$')
-    _despine(ax)
+    nmp.plotting.despine(ax, bottom=True)
     fig_change.savefig(sess_manager.fig_folder / 'dOffset_cl1_v_cl2.pdf', bbox_inches='tight')
 
     return (fig_offsets, fig_change), {'n': len(diff), 'median_abs_change': float(np.median(diff))}
@@ -243,13 +210,13 @@ def plot_bump_profile(sess_manager, bump_grouped):
     fig, axs = plt.subplots(1, 2, figsize=[10, 5])
     for ax, transform, ylabel in zip(axs, (lambda x: x, minmax), ('z-scored dF/F', 'normalized dF/F'), strict=True):
         for dat, color, label in ((dark, DARK_COLOR, 'dark'), (cl, CL_COLOR, 'closed loop')):
-            mu, sem = _mean_sem(transform(dat))
+            mu, sem = nmp.utilities.mean_sem(transform(dat))
             x = np.arange(mu.size) - mu.size // 2
             ax.plot(x, mu, color=color, linewidth=5, label=label)
             ax.fill_between(x, mu - sem, mu + sem, color=color, alpha=.3)
         ax.set_xlabel('ROI relative to PVA')
         ax.set_ylabel(ylabel)
-        _despine(ax, bottom=False)
+        nmp.plotting.despine(ax)
     axs[0].legend()
     fig.savefig(sess_manager.fig_folder / 'bump_profile_dark_v_closed_loop.pdf', bbox_inches='tight')
     return fig, {'n': len(dark)}
@@ -264,7 +231,7 @@ def plot_bump_width(sess_manager, bump_grouped):
     fig.savefig(sess_manager.fig_folder / 'bump_width_dark_v_closed_loop.pdf', bbox_inches='tight')
 
     wide = width_df.pivot(index='fly_id', columns='closed_loop', values='fwhm')
-    return fig, _wilcoxon(wide[0], wide[1])
+    return fig, nmp.stats.wilcoxon_vs(wide[0], wide[1])
 
 
 # ----------------------------------------------------------------------------

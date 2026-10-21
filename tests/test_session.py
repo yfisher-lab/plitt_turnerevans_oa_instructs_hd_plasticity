@@ -204,8 +204,8 @@ def test_from_trial_dict_is_what_getts_dte_calls():
 
 
 def test_session_and_trial_timeseries_share_the_ring_base_class(ts):
-    assert isinstance(ts, tp.session.RingTimeseries)
-    assert isinstance(tp.session.GetTS_DTE(make_trial_dict(1), CHANNELS), tp.session.RingTimeseries)
+    assert isinstance(ts, tp.session.EllipsoidBodyTimeseries)
+    assert isinstance(tp.session.GetTS_DTE(make_trial_dict(1), CHANNELS), tp.session.EllipsoidBodyTimeseries)
 
 
 def test_extra_fields_of_each_source(ts, pp):

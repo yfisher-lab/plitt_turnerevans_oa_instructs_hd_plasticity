@@ -2,7 +2,7 @@
 
 Shared building blocks: ``session``, ``stats``, ``bump_shape``, ``plotting``, ``loading`` and
 ``utilities``. Experiment modules: ``epg_across_dark``, ``tbh_rnai``, ``oa_receptor_ko``,
-``grab_sensors``, ``dual_imaging``, ``remapping``, ``epg_silencing`` and ``shibirets``.
+``grab_sensors``, ``group_comparison``, ``dual_imaging``, ``remapping``, ``epg_silencing`` and ``shibirets``.
 """
 
 from . import (
@@ -11,6 +11,7 @@ from . import (
     epg_across_dark,
     epg_silencing,
     grab_sensors,
+    group_comparison,
     loading,
     oa_receptor_ko,
     plotting,
@@ -28,6 +29,7 @@ __all__ = [
     "epg_across_dark",
     "epg_silencing",
     "grab_sensors",
+    "group_comparison",
     "loading",
     "oa_receptor_ko",
     "plotting",

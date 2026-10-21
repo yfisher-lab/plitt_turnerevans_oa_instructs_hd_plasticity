@@ -17,6 +17,7 @@ mapping a row to a preprocessed session (see :mod:`loading`).
 
 import numpy as np
 import pandas as pd
+import pingouin as pg
 import scipy as sp
 
 from . import bump_shape, session
@@ -35,7 +36,7 @@ def _meta(row, meta_cols):
 # Offset statistics
 # ----------------------------------------------------------------------------
 def offset_stats(session_manager, meta_cols=None, **ts_kwargs):
-    """Compute offset statistics (variance, mean, magnitude) for each session and channel.
+    """Compute offset statistics (mean, magnitude) for each session and channel.
 
     Computes circular statistics on the EPG offset (difference between heading and PVA)
     for each imaging session. Sessions with several channels (``ts.offset_c`` of shape
@@ -49,8 +50,7 @@ def offset_stats(session_manager, meta_cols=None, **ts_kwargs):
 
     Returns:
         DataFrame with the `meta_cols`, a ``channel`` column (only for multi-channel sessions;
-        the index along the first dimension of ``ts.offset_c``), and offset_var, offset_mean,
-        offset_mag.
+        the index along the first dimension of ``ts.offset_c``), and offset_mean, offset_mag.
     """
     meta_cols = BASIC_META_COLS if meta_cols is None else meta_cols
     rows = []
@@ -85,12 +85,12 @@ def offset_stats_unique(stats_df, group_col=None, min_cl=1, dark_col='dark'):
 
     Reduces multiple sessions per condition to single values by averaging, creating one
     closed-loop row and one dark row per fly (and per channel, if `stats_df` has a ``channel``
-    column). Only flies with both closed-loop and dark sessions are kept. Also adds
-    ``offset_var_logit`` (logit of the mean variance) for mixed effects modeling.
+    column). Only flies with both closed-loop and dark sessions are kept. See :func:`add_offset_var` for the
+    offset variance and its logit, used for mixed effects modeling.
 
     Args:
-        stats_df: Output from :func:`offset_stats`; needs fly_id, closed_loop, offset_var,
-            offset_mean, offset_mag, and `dark_col` / `group_col` if given.
+        stats_df: Output from :func:`offset_stats`; needs fly_id, closed_loop, offset_mean,
+            offset_mag, and `dark_col` / `group_col` if given.
         group_col: Optional column identifying the experimental group of each fly (e.g.
             'rnai', 'condition'); copied to the result.
         min_cl: Sessions with ``closed_loop >= min_cl`` count as closed loop.
@@ -102,7 +102,7 @@ def offset_stats_unique(stats_df, group_col=None, min_cl=1, dark_col='dark'):
     Returns:
         DataFrame with one row per condition per fly (per channel) and columns fly_id,
         [channel], closed_loop (1 = closed-loop row, 0 = dark row), [group_col], dark,
-        offset_var, offset_var_logit, offset_mean, offset_mag.
+        offset_mean, offset_mag.
     """
     rows = []
 
@@ -134,6 +134,18 @@ def offset_stats_unique(stats_df, group_col=None, min_cl=1, dark_col='dark'):
                 })
 
     return pd.DataFrame(rows)
+
+
+def add_offset_var(stats_df):
+    """Add the circular variance of the offset and its logit to a table with ``offset_mag``.
+
+    ``offset_var = 1 - offset_mag`` (the circular variance of the offset), and ``offset_var_logit`` is its logit,
+    used for mixed effects modeling. Works on per-session or per-fly tables; returns a copy.
+    """
+    stats_df = stats_df.copy()
+    stats_df['offset_var'] = 1 - stats_df['offset_mag']
+    stats_df['offset_var_logit'] = sp.special.logit(stats_df['offset_var'])
+    return stats_df
 
 
 def offset_stats_plot(stats_df_unique, group_col=None):
@@ -343,3 +355,24 @@ def reformat_binned_stats_for_reg(grouped_stats, dh_bins, value_cols, meta_cols=
             })
 
     return pd.DataFrame(rows, columns=columns)
+
+
+# ----------------------------------------------------------------------------
+# Small tests shared by the figure scripts
+# ----------------------------------------------------------------------------
+def wilcoxon_vs(x, reference):
+    """Wilcoxon signed-rank test of `x` against a constant, or against paired values `reference`.
+
+    Returns:
+        Dict with the number of values ``n``, the statistic ``W`` and ``p``.
+    """
+    W, p = sp.stats.wilcoxon(np.asarray(x, dtype=float) - np.asarray(reference, dtype=float))
+    return {'n': len(x), 'W': float(W), 'p': float(p)}
+
+
+def add_holm(tests, mask=None):
+    """Add Holm-corrected p-values of the rows selected by `mask` (default: all) as ``p_holm`` to a table with ``p``."""
+    mask = np.ones(len(tests), dtype=bool) if mask is None else mask
+    tests['p_holm'] = np.nan
+    tests.loc[mask, 'p_holm'] = pg.multicomp(tests.loc[mask, 'p'].to_numpy(), method='holm')[1]
+    return tests

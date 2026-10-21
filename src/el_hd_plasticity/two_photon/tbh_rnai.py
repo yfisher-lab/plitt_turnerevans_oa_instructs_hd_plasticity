@@ -22,21 +22,20 @@ REG_META_COLS = ('fly_id', 'rnai', 'dark')
 MIN_CL = 2
 
 
-def offset_stats(sess_df, load_row, **kwargs):
-    """Compute offset statistics (variance, mean, magnitude) for each session.
+def offset_stats(session_manager, **kwargs):
+    """Compute offset statistics (mean, magnitude) for each session.
 
     Computes circular statistics on EPG offset (difference between heading and PVA)
     for each imaging session across different closed-loop and dark conditions.
 
     Args:
-        sess_df: DataFrame with session metadata including fly_id, closed_loop, dark, rnai columns.
-        load_row: Callable that loads preprocessed data for a session row.
+        session_manager: Session manager object whose session table has fly_id, closed_loop, dark and rnai columns.
         **kwargs: Passed to :meth:`session.SessionTimeseries.from_session`.
 
     Returns:
-        DataFrame with columns: fly_id, closed_loop, dark, rnai, offset_var, offset_mean, offset_mag.
+        DataFrame with columns: fly_id, closed_loop, dark, rnai, offset_mean, offset_mag.
     """
-    return stats.offset_stats(sess_df, load_row, meta_cols=OFFSET_META_COLS, **kwargs)
+    return stats.offset_stats(session_manager, meta_cols=OFFSET_META_COLS, **kwargs)
 
 
 def offset_stats_unique(stats_df):
@@ -44,8 +43,8 @@ def offset_stats_unique(stats_df):
 
     Reduces multiple sessions per condition to single values by averaging, creating
     one row per condition per fly. Requires flies to have both closed-loop (more than one
-    closed-loop block of experience) and dark data. Applies logit transform for mixed
-    effects modeling.
+    closed-loop block of experience) and dark data. Adds the offset variance and its logit
+    (:func:`stats.add_offset_var`) for mixed effects modeling.
 
     Args:
         stats_df: Output from offset_stats().
@@ -53,7 +52,7 @@ def offset_stats_unique(stats_df):
     Returns:
         DataFrame with one row per condition per fly containing aggregated statistics.
     """
-    return stats.offset_stats_unique(stats_df, group_col='rnai', min_cl=MIN_CL)
+    return stats.add_offset_var(stats.offset_stats_unique(stats_df, group_col='rnai', min_cl=MIN_CL))
 
 
 def offset_stats_plot(stats_df_unique):
