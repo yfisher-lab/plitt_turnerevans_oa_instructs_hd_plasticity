@@ -66,3 +66,15 @@ def test_shift_by_pva_centers_each_time_point_on_its_pva():
     out = ra.shift_by_pva(arr.copy(), pva, 0)
     # the rolled peak lies within one ROI of the center for every time point
     assert np.all(np.abs(np.argmax(out[0], axis=0) - N // 2) <= 1)
+
+
+def test_mean_phase_null_profile_centers_peak_and_ignores_weak_frames():
+    n = 16
+    ang = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    rng = np.random.default_rng(0)
+    centers = rng.uniform(0, 2 * np.pi, 50)
+    dff = np.exp(2 * np.cos(ang[:, None] - centers[None, :]))
+    prof = ra.mean_phase_null_profile(dff)
+    assert prof.shape == (n,) and np.argmax(prof) == n // 2
+    flat = np.concatenate([dff, np.ones((n, 5))], axis=1)       # frames with no bump
+    assert np.allclose(ra.mean_phase_null_profile(flat), prof)

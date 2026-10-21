@@ -151,3 +151,13 @@ def test_offset_stats_unique_and_plot_work_per_channel(two_channel, sess_df):
     assert np.isclose(ch1['offset_var'], expected)
     wide = tp.stats.offset_stats_plot(uniq)
     assert len(wide) == 2 * sess_df['fly_id'].nunique() and set(wide['channel']) == {0, 1}
+
+
+def test_bump_stats_and_group_bump_stats(manager):
+    bs = tp.stats.bump_stats(manager)
+    assert list(bs.columns) == ['fly_id', 'closed_loop', 'profile']
+    assert len(bs) == len(manager.sess_df)
+    g = tp.stats.group_bump_stats(bs)
+    assert len(g) == manager.sess_df[['fly_id', 'closed_loop']].drop_duplicates().shape[0]
+    assert all(np.argmax(p) == len(p) // 2 for p in g['profile'])
+    assert (g['fwhm'].dropna() > 0).all()

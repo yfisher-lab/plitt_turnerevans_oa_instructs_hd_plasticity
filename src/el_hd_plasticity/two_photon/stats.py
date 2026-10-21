@@ -8,6 +8,8 @@ computations live here and are parameterized by those column names:
   heading offset per session, averaged per fly, and reshaped for plotting.
 * ``rho_stats`` / ``dphi_stats``: population-vector magnitude and angular velocity binned by
   heading velocity, and ``reformat_binned_stats_for_reg`` to unpivot them for regression.
+* ``bump_stats`` / ``group_bump_stats``: time-averaged, phase-nulled bump profile per session, and
+  its mean profile and width (FWHM) per fly and condition.
 
 Session tables are DataFrames with one row per imaging session; ``load_row`` is a function
 mapping a row to a preprocessed session (see :mod:`loading`).
@@ -17,7 +19,7 @@ import numpy as np
 import pandas as pd
 import scipy as sp
 
-from . import session
+from . import bump_shape, session
 from .utilities import binned_mean
 
 # Session-table columns copied into per-session statistics by default.
@@ -261,6 +263,53 @@ def dphi_stats(session_manager, dh_bins, meta_cols=None, **ts_kwargs):
         })
 
     return pd.DataFrame(rows)
+
+
+# ----------------------------------------------------------------------------
+# Bump shape statistics
+# ----------------------------------------------------------------------------
+def bump_stats(session_manager, meta_cols=None, rho_min=.05, **ts_kwargs):
+    """Compute the time-averaged, phase-nulled bump profile of each session.
+
+    Args:
+        session_manager: Session manager object.
+        meta_cols: Session-table columns copied to the result under the same names.
+            Defaults to ``('fly_id', 'closed_loop')``.
+        rho_min: Minimum first-harmonic magnitude for a time point to be included (see
+            :func:`bump_shape.mean_phase_null_profile`).
+        **ts_kwargs: Passed to :meth:`session.SessionTimeseries.from_session`.
+
+    Returns:
+        DataFrame with the `meta_cols` plus ``profile``: array of shape (n_rois,) with the bump
+        peak in the middle.
+    """
+    meta_cols = BASIC_META_COLS if meta_cols is None else meta_cols
+    rows = []
+
+    for _, row in session_manager.iterrows():
+        ts = session.GetTS(session_manager.load_row(row), **ts_kwargs)
+        rows.append({**_meta(row, meta_cols),
+                     'profile': bump_shape.mean_phase_null_profile(ts.dff, rho_min=rho_min)})
+
+    return pd.DataFrame(rows)
+
+
+def group_bump_stats(bump_stats, group_cols=('fly_id', 'closed_loop'), factor=16, baseline='min'):
+    """Average bump profiles over the sessions of each fly and condition and measure their width.
+
+    Args:
+        bump_stats: Output of :func:`bump_stats`.
+        group_cols: Columns of `bump_stats` defining a fly and condition.
+        factor, baseline: Passed to :func:`bump_shape.fwhm`.
+
+    Returns:
+        DataFrame with one row per group holding the mean ``profile`` and its ``fwhm`` (radians;
+        NaN if the profile never drops below half maximum).
+    """
+    grouped = (bump_stats.groupby(list(group_cols))['profile']
+               .apply(lambda x: np.mean(np.stack(x), axis=0)).reset_index())
+    grouped['fwhm'] = bump_shape.fwhm(np.stack(grouped['profile']), factor=factor, baseline=baseline)
+    return grouped
 
 
 def reformat_binned_stats_for_reg(grouped_stats, dh_bins, value_cols, meta_cols=('fly_id',)):
