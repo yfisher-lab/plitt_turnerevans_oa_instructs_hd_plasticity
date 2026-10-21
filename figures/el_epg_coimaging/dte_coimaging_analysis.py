@@ -23,10 +23,14 @@ from el_epg_coimaging_analysis import (
     CHANNELS,
     CL_COLOR,
     DH_BINS,
+    RHO_MIN,
     _despine,
     _jitter,
     _mean_sem,
     _wilcoxon_vs,
+    bump_width_channel_tests,
+    paired_levels_plot,
+    plot_bump_profiles_by_channel,
     pva_diff_vs_speed_plot,
     save_tables,
 )
@@ -35,6 +39,7 @@ DATA_PATH = pathlib.Path('/media/mplitt/SSD_storage/2P_scratch/DTE_EL_EPG_dual_c
 DEFAULT_FIGDIR = pathlib.Path('/media/mplitt/SSD_storage/fig_scratch/DTE_EPG_EL_coimaging')
 
 TURN_DH_RANGE = (100 / 180 * np.pi, 2 * np.pi)       # turning speeds (rad/s) counted as fast turns: 100-360 deg/s
+TURN_ALIGNMENT = 'phase'                             # 'phase': sub-ROI bump phase shift; 'max': whole-ROI peak shift
 ONLY_CLOSED_LOOP = ((1, CL_COLOR, 'closed loop'),)
 
 
@@ -101,12 +106,49 @@ def plot_abs_offset_diff(figdir, data, channel_lookup):
 
 
 # ----------------------------------------------------------------------------
+# Bump width
+# ----------------------------------------------------------------------------
+BUMP_WIDTH_YLIM = (np.pi / 4, np.pi)     # widths of this dataset lie within this range
+
+
+def compute_bump_stats(data, channel_lookup, rho_min=RHO_MIN):
+    """Mean phase-nulled bump profile and width (FWHM) per fly and channel (all trials averaged)."""
+    bump_stats = nmp.dual_imaging.bump_stats_DTE(data, channel_lookup, rho_min=rho_min)
+    return nmp.dual_imaging.group_bump_stats(bump_stats).dropna(subset='fwhm')
+
+
+def plot_bump_profiles(figdir, grouped):
+    """Mean bump profile of EPG and EL over flies (raw and min-max normalized)."""
+    fig = plot_bump_profiles_by_channel(grouped, [(1, 'Closed loop')], raw_label='dF/F')
+    fig.savefig(pathlib.Path(figdir) / 'bump_profile_EL_v_EPG.pdf', bbox_inches='tight')
+    return fig
+
+
+def plot_bump_width(figdir, grouped, connect=True):
+    """Bump width (FWHM) of EPG vs EL per fly, with a Wilcoxon signed-rank test.
+
+    Returns:
+        Tuple of (figure, DataFrame of tests).
+    """
+    sel = grouped[grouped.groupby('fly_id')['channel'].transform('nunique') == len(CHANNELS)]
+    fig, ax = plt.subplots(figsize=[2, 4])
+    paired_levels_plot(ax, sel, 'channel', [(c, name, CHANNEL_COLORS[name]) for c, name in enumerate(CHANNELS)],
+                       'fwhm', BUMP_WIDTH_YLIM, connect)
+    ax.set_ylabel('bump FWHM (rad)')
+    fig.savefig(pathlib.Path(figdir) / 'bump_width_EL_v_EPG.pdf', bbox_inches='tight')
+    return fig, bump_width_channel_tests(grouped, [(1, 'closed loop')])
+
+
+# ----------------------------------------------------------------------------
 # Activity during fast turns
 # ----------------------------------------------------------------------------
-def plot_turn_profiles(figdir, data, channel_lookup, dh_range=TURN_DH_RANGE):
-    """Turn-triggered EPG and EL bump profiles over all trials."""
+def plot_turn_profiles(figdir, data, channel_lookup, dh_range=TURN_DH_RANGE, alignment=TURN_ALIGNMENT):
+    """Turn-triggered EPG and EL bump profiles over all trials.
+
+    `alignment` is 'phase' (sub-ROI shift by the EPG bump phase) or 'max' (whole-ROI shift to the EPG peak).
+    """
     timeseries = (ts for _, _, ts in iter_timeseries(data, channel_lookup, dh_sigma=.3))
-    ccw, cw = nmp.dual_imaging.turn_triggered_profiles(timeseries, *dh_range)
+    ccw, cw = nmp.dual_imaging.turn_triggered_profiles(timeseries, *dh_range, alignment=alignment)
     fig, pva = nmp.dual_imaging.plot_turn_profiles(ccw, cw, colors=[CHANNEL_COLORS[c] for c in CHANNELS])
     fig.savefig(pathlib.Path(figdir) / 'EPG_centered_turns.pdf', format='pdf', bbox_inches='tight')
     return fig, {name: {c: float(v) for c, v in zip(CHANNELS, angles, strict=True)} for name, angles in pva.items()}
@@ -194,6 +236,10 @@ def main(data_path=DATA_PATH, figdir=DEFAULT_FIGDIR, trial_figures=True):
     _, unique, test = plot_abs_offset_diff(figdir, data, channel_lookup)
     tables['abs_offset_diff_vs_chance'] = pd.DataFrame([test])
     tables['abs_offset_diff_per_fly'] = unique
+
+    grouped_bump = compute_bump_stats(data, channel_lookup)
+    plot_bump_profiles(figdir, grouped_bump)
+    tables['bump_width_EL_vs_EPG'] = plot_bump_width(figdir, grouped_bump)[1]
 
     _, pva = plot_turn_profiles(figdir, data, channel_lookup)
     tables['turn_profile_pva'] = pd.DataFrame(pva).rename_axis('channel').reset_index()

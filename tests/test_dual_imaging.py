@@ -63,6 +63,10 @@ def test_turn_triggered_profiles_shape_and_normalization(sess_df, load_row):
     ccw, cw = di.turn_triggered_profiles(timeseries, 0, 100)
     assert ccw.shape == (3, 2, 16) and cw.shape == (3, 2, 16)
     assert np.allclose(ccw.min(axis=-1), 0) and np.allclose(ccw.max(axis=-1), 1)
+    ccw_max, cw_max = di.turn_triggered_profiles(timeseries, 0, 100, alignment='max')
+    assert ccw_max.shape == ccw.shape
+    with pytest.raises(ValueError):
+        di.turn_triggered_profiles(timeseries, 0, 100, alignment='nope')
     fig, pva = di.plot_turn_profiles(ccw, cw)
     assert set(pva) == {'clockwise', 'counter-clockwise'} and pva['clockwise'].shape == (2,)
 

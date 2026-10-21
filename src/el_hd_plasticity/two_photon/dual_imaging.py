@@ -16,7 +16,7 @@ from matplotlib import pyplot as plt
 from matplotlib.gridspec import GridSpec as GS
 from matplotlib.ticker import AutoMinorLocator
 
-from . import bump_shape, plotting, session, utilities
+from . import bump_shape, plotting, session, stats, utilities
 from .utilities import DEFAULT_OFFSET_BINS, DEFAULT_PLOT_TIMES, binned_mean, wrap_angle
 
 CH_COLORS = ('Greys', 'Greens')  # default colormaps for (EPG, EL)
@@ -256,31 +256,92 @@ def cross_corr_stats(session_manager, delays=None, times=None):
 
 
 # ----------------------------------------------------------------------------
+# Bump shape
+# ----------------------------------------------------------------------------
+def _bump_profiles(ts, rho_min):
+    """Time-averaged phase-nulled bump profile of each channel, shape (n_channels, n_rois)."""
+    return [bump_shape.mean_phase_null_profile(channel, rho_min=rho_min) for channel in ts.dff]
+
+
+def _bump_rows(fly_id, cl, ts, rho_min):
+    return [{'fly_id': fly_id, 'cl': cl, 'channel': channel, 'profile': profile}
+            for channel, profile in enumerate(_bump_profiles(ts, rho_min))]
+
+
+def bump_stats(session_manager, rho_min=.05):
+    """Time-averaged, phase-nulled bump profile of each channel of each session.
+
+    Args:
+        session_manager: Session manager object.
+        rho_min: Minimum first-harmonic magnitude for a time point to be included (see
+            :func:`bump_shape.mean_phase_null_profile`); applied to each channel separately.
+
+    Returns:
+        DataFrame with one row per session and channel: fly_id, cl, channel (0 / 1) and ``profile``, an
+        array of shape (n_rois,) with the bump peak in the middle.
+    """
+    rows = []
+    for _, row in session_manager.iterrows():
+        ts = session.GetTS(session_manager.load_row(row), channels=[0, 1])
+        rows += _bump_rows(row['fly_id'], row['closed_loop'], ts, rho_min)
+    return pd.DataFrame(rows)
+
+
+def bump_stats_DTE(data, channel_lookup, rho_min=.05):
+    """:func:`bump_stats` for the DTE dataset (one row per trial and channel; ``cl`` is always 1)."""
+    rows = []
+    for fly, multitrial_dict in data.items():
+        for trial_dict in multitrial_dict.values():
+            ts = session.GetTS_DTE(trial_dict, channel_lookup[fly])
+            rows += _bump_rows(fly.split("\\")[-1], 1, ts, rho_min)
+    return pd.DataFrame(rows)
+
+
+def group_bump_stats(bump_stats_df, **kwargs):
+    """Average the bump profiles over the sessions of each fly, condition and channel and measure their width.
+
+    Args:
+        bump_stats_df: Output of :func:`bump_stats` or :func:`bump_stats_DTE`.
+        **kwargs: Passed to :func:`stats.group_bump_stats` (``factor``, ``baseline``).
+
+    Returns:
+        DataFrame with one row per fly, cl and channel: the mean ``profile`` and its ``fwhm`` (radians).
+    """
+    return stats.group_bump_stats(bump_stats_df, group_cols=('fly_id', 'cl', 'channel'), **kwargs)
+
+
+# ----------------------------------------------------------------------------
 # Activity during fast turns
 # ----------------------------------------------------------------------------
-def turn_triggered_profiles(timeseries, dh_min, dh_max, sortby_index=0):
+def turn_triggered_profiles(timeseries, dh_min, dh_max, sortby_index=0, alignment='phase'):
     """Mean bump profile of each channel during fast counter-clockwise and clockwise turns.
 
     For every timeseries the time points with ``dh_min < dh < dh_max`` (counter-clockwise) or
-    ``-dh_max < dh < -dh_min`` (clockwise) are rolled so the peak of channel `sortby_index` sits at
-    the center ROI, averaged over time, and min-max normalized per channel. Timeseries without such
-    time points are skipped for that direction.
+    ``-dh_max < dh < -dh_min`` (clockwise) are shifted so the bump of channel `sortby_index` sits at the
+    center ROI (both channels by the same amount), averaged over time, and min-max normalized per channel.
+    Timeseries without such time points are skipped for that direction.
 
     Args:
         timeseries: Iterable of two-channel timeseries (``dff`` of shape (channels, ROIs, time) and ``dh``,
             see :func:`session.GetTS` and :func:`session.GetTS_DTE` with ``dh_sigma=.3``).
         dh_min, dh_max: Range of turning speeds (rad/s).
-        sortby_index: Channel whose peak defines the shift applied to both channels.
+        sortby_index: Channel whose bump defines the shift applied to both channels.
+        alignment: 'phase' (default) shifts to sub-ROI precision by nulling the first-harmonic phase, as in
+            the bump shape analyses (:func:`bump_shape.shift_by_phase`); 'max' rolls by whole ROIs so the
+            peak ROI is at the center (:func:`bump_shape.shift_by_max`).
 
     Returns:
         Tuple (ccw, cw) of arrays of shape (n_timeseries, n_channels, n_rois).
     """
+    shifts = {'phase': bump_shape.shift_by_phase, 'max': bump_shape.shift_by_max}
+    if alignment not in shifts:
+        raise ValueError(f"alignment must be 'phase' or 'max', not {alignment!r}")
     ccw, cw = [], []
     for ts in timeseries:
         for mask, out in ((np.logical_and(ts.dh > dh_min, ts.dh < dh_max), ccw),
                           (np.logical_and(ts.dh < -dh_min, ts.dh > -dh_max), cw)):
             if mask.sum() > 0:
-                out.append(bump_shape.shift_by_max(ts.dff[:, :, mask], sortby_index).mean(axis=-1))
+                out.append(shifts[alignment](ts.dff[:, :, mask], sortby_index).mean(axis=-1))
 
     def normalize(arr):
         arr = np.array(arr)

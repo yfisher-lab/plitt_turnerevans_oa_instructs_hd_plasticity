@@ -37,6 +37,8 @@ DH_BINS = np.linspace(-np.pi, np.pi, num=11)     # signed heading velocity bins 
 PV_BINS = np.linspace(0, .8, num=20)             # bins of the channel-averaged PV magnitude; last bin is open-ended
 TURN_DH_RANGE = (np.pi, 2 * np.pi)               # turning speeds (rad/s) counted as fast turns: 180-360 deg/s
 TURN_CLOSED_LOOP = 0                             # turn-triggered profiles use dark sessions
+RHO_MIN = .05                                    # minimum PV magnitude for a time point to count as a bump
+TURN_ALIGNMENT = 'phase'                         # 'phase': sub-ROI bump phase shift; 'max': whole-ROI peak shift
 ANGLE_TICKS = [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4, np.pi]
 ANGLE_TICK_LABELS = ['0', r'$\pi$/4', r'$\pi$/2', r'$3\pi$/4', r'$\pi$']
 
@@ -91,7 +93,7 @@ def merge_closed_loop(stats_df):
 
 
 def paired_dark_vs_cl_plot(df, ycol, ylabel, ylim=(0, np.pi), yticks=ANGLE_TICKS, yticklabels=ANGLE_TICK_LABELS):
-    """Dark (x=0) vs closed loop (x=1) value per fly, joined by lines; the style of the EPG-across-dark plots.
+    """Dark (x=0) vs closed loop (x=1) value per fly (points only, not joined); the style of the EPG-across-dark plots.
 
     Args:
         df: Table with fly_id, ``cl`` (0 / 1) and `ycol`.
@@ -99,8 +101,6 @@ def paired_dark_vs_cl_plot(df, ycol, ylabel, ylim=(0, np.pi), yticks=ANGLE_TICKS
     df = df.copy()
     df['x'] = df['cl'] + df['fly_id'].map(_jitter(df['fly_id']))
     fig, ax = plt.subplots(figsize=[2, 4])
-    sns.lineplot(data=df, x='x', y=ycol, units='fly_id', estimator=None, color='black', zorder=-10,
-                 ax=ax, alpha=.3)
     sns.scatterplot(data=df, x='x', y=ycol, hue='cl', palette={0: DARK_COLOR, 1: CL_COLOR},
                     s=100, legend=False, ax=ax)
     ax.set_xticks([0, 1], labels=('dark', 'closed loop'))
@@ -163,6 +163,152 @@ def pva_diff_vs_speed_plot(grouped_pvd, bins, conditions=((1, CL_COLOR, 'closed 
     return fig, stats
 
 
+def paired_levels_plot(ax, df, xcol, levels, ycol, ylim, connect=True):
+    """One value per fly at each of several x positions on `ax`, optionally joined by lines.
+
+    Args:
+        df: Table with fly_id, `xcol` and `ycol`.
+        xcol: Column whose values are the x positions.
+        levels: List of ``(value of xcol, tick label, color)`` in x order.
+        ylim: y-limits; y-ticks are the multiples of pi/4 inside them.
+        connect: Join the points of each fly with a light line.
+    """
+    df = df.copy()
+    df['x'] = df[xcol].map({value: i for i, (value, _, _) in enumerate(levels)}) + df['fly_id'].map(_jitter(df['fly_id']))
+    if connect:
+        sns.lineplot(data=df, x='x', y=ycol, units='fly_id', estimator=None, color='black', zorder=-10,
+                     ax=ax, alpha=.3)
+    sns.scatterplot(data=df, x='x', y=ycol, hue=xcol, palette={value: color for value, _, color in levels},
+                    s=100, legend=False, ax=ax)
+    ax.set_xticks(range(len(levels)), labels=[label for _, label, _ in levels])
+    ax.set_xlabel('')
+    ax.set_ylabel('')
+    ax.set_xlim([-.15, len(levels) - 1 + .15])
+    ax.set_ylim(ylim)
+    ticks = [(t, l) for t, l in zip(ANGLE_TICKS, ANGLE_TICK_LABELS, strict=True) if ylim[0] - 1e-9 <= t <= ylim[1] + 1e-9]
+    ax.set_yticks([t for t, _ in ticks], labels=[l for _, l in ticks])
+    _despine(ax, bottom=True)
+
+
+def plot_bump_profiles_by_channel(grouped, cl_levels, normalize_rows=True, raw_label='z-scored dF/F'):
+    """Mean +- SEM bump profile over flies of EPG and EL, one column per condition.
+
+    Args:
+        grouped: Output of :func:`nmp.dual_imaging.group_bump_stats` (``profile``, ``channel``, ``cl``).
+        cl_levels: List of ``(cl value, title)`` giving the columns.
+        normalize_rows: Add a second row with each fly's profile min-max normalized.
+        raw_label: y-label of the un-normalized profiles.
+    """
+    def minmax(x):
+        return (x - x.min(axis=1, keepdims=True)) / (x.max(axis=1, keepdims=True) - x.min(axis=1, keepdims=True))
+
+    rows = [(lambda x: x, raw_label)] + ([(minmax, 'normalized dF/F')] if normalize_rows else [])
+    fig, axs = plt.subplots(len(rows), len(cl_levels), figsize=[5 * len(cl_levels), 5 * len(rows)], squeeze=False,
+                            sharex=True)
+    for r, (transform, ylabel) in enumerate(rows):
+        for c, (cl, title) in enumerate(cl_levels):
+            ax = axs[r, c]
+            for channel, name in enumerate(CHANNELS):
+                sel = grouped.loc[(grouped['cl'] == cl) & (grouped['channel'] == channel)]
+                mu, sem = _mean_sem(transform(np.stack(sel['profile'])))
+                x = np.arange(mu.size) - mu.size // 2
+                ax.plot(x, mu, color=CHANNEL_COLORS[name], linewidth=3, label=f'{name} (n={len(sel)})')
+                ax.fill_between(x, mu - sem, mu + sem, color=CHANNEL_COLORS[name], alpha=.3)
+            ax.set_ylabel(ylabel if c == 0 else '')
+            ax.set_xlabel('ROI relative to PVA' if r == len(rows) - 1 else '')
+            if r == 0:
+                ax.set_title(title)
+            _despine(ax)
+    axs[0, 0].legend()
+    fig.tight_layout()
+    return fig
+
+
+def _holm(tests, mask=None):
+    """Add Holm-corrected p-values (across the rows selected by `mask`) as ``p_holm`` to the test table."""
+    mask = np.ones(len(tests), dtype=bool) if mask is None else mask
+    tests['p_holm'] = np.nan
+    tests.loc[mask, 'p_holm'] = pg.multicomp(tests.loc[mask, 'p'].to_numpy(), method='holm')[1]
+    return tests
+
+
+def bump_width_channel_tests(grouped, conditions):
+    """Wilcoxon signed-rank tests of the bump width of EL vs EPG within each condition (Holm-corrected).
+
+    Args:
+        grouped: Output of :func:`nmp.dual_imaging.group_bump_stats`.
+        conditions: List of ``(cl value, name)``.
+    """
+    rows = []
+    for cl, name in conditions:
+        wide = grouped.loc[grouped['cl'] == cl].pivot(index='fly_id', columns='channel', values='fwhm').dropna()
+        rows.append({'condition': name, 'comparison': 'EL vs EPG', **_wilcoxon_vs(wide[1], wide[0].to_numpy()),
+                     'median_diff': float(np.median(wide[1] - wide[0]))})
+    return _holm(pd.DataFrame(rows))
+
+
+# ----------------------------------------------------------------------------
+# Bump width: EL vs EPG, closed loop vs dark
+# ----------------------------------------------------------------------------
+def compute_bump_stats(sess_manager, rho_min=RHO_MIN):
+    """Mean phase-nulled bump profile and width (FWHM) per fly, condition and channel (all closed-loop blocks merged)."""
+    bump_stats = merge_closed_loop(nmp.dual_imaging.bump_stats(sess_manager, rho_min=rho_min))
+    return nmp.dual_imaging.group_bump_stats(bump_stats).dropna(subset='fwhm')
+
+
+def plot_bump_profiles(sess_manager, grouped):
+    """Mean bump profile of EPG and EL: closed loop | dark (raw and min-max normalized)."""
+    fig = plot_bump_profiles_by_channel(grouped, [(1, 'Closed loop'), (0, 'Dark')])
+    fig.savefig(sess_manager.fig_folder / 'bump_profile_EL_v_EPG.pdf', bbox_inches='tight')
+    return fig
+
+
+BUMP_WIDTH_YLIM = (np.pi / 2, np.pi)     # widths of the sessions lie within this range
+
+
+def plot_bump_width_by_channel(sess_manager, grouped, connect=True):
+    """Bump width (FWHM) of EPG vs EL per fly, closed loop | dark, with Wilcoxon tests (Holm-corrected).
+
+    Returns:
+        Tuple of (figure, DataFrame of tests).
+    """
+    conditions = [(1, 'closed loop'), (0, 'dark')]
+    fig, axs = plt.subplots(1, 2, sharey=True, figsize=[4, 4])
+    levels = [(c, name, CHANNEL_COLORS[name]) for c, name in enumerate(CHANNELS)]
+    for ax, (cl, name) in zip(axs, conditions, strict=True):
+        sel = grouped.loc[grouped['cl'] == cl]
+        sel = sel[sel.groupby('fly_id')['channel'].transform('nunique') == len(CHANNELS)]
+        paired_levels_plot(ax, sel, 'channel', levels, 'fwhm', BUMP_WIDTH_YLIM, connect)
+        ax.set_title(f'{name} (n={sel["fly_id"].nunique()})', fontsize=9)
+    axs[0].set_ylabel('bump FWHM (rad)')
+    fig.tight_layout()
+    fig.savefig(sess_manager.fig_folder / 'bump_width_EL_v_EPG.pdf', bbox_inches='tight')
+    return fig, bump_width_channel_tests(grouped, conditions)
+
+
+def plot_bump_width_by_condition(sess_manager, grouped, connect=True):
+    """Bump width (FWHM) in the dark vs closed loop per fly, EPG | EL, with Wilcoxon tests (Holm-corrected).
+
+    Returns:
+        Tuple of (figure, DataFrame of tests).
+    """
+    fig, axs = plt.subplots(1, 2, sharey=True, figsize=[4, 4])
+    levels = [(0, 'dark', DARK_COLOR), (1, 'closed loop', CL_COLOR)]
+    rows = []
+    for ax, (channel, name) in zip(axs, enumerate(CHANNELS), strict=True):
+        sel = grouped.loc[grouped['channel'] == channel]
+        sel = sel[sel.groupby('fly_id')['cl'].transform('nunique') == 2]
+        paired_levels_plot(ax, sel, 'cl', levels, 'fwhm', BUMP_WIDTH_YLIM, connect)
+        ax.set_title(f'{name} (n={sel["fly_id"].nunique()})', fontsize=9)
+        wide = sel.pivot(index='fly_id', columns='cl', values='fwhm')
+        rows.append({'channel': name, 'comparison': 'closed loop vs dark', **_wilcoxon_vs(wide[1], wide[0].to_numpy()),
+                     'median_diff': float(np.median(wide[1] - wide[0]))})
+    axs[0].set_ylabel('bump FWHM (rad)')
+    fig.tight_layout()
+    fig.savefig(sess_manager.fig_folder / 'bump_width_dark_v_closed_loop.pdf', bbox_inches='tight')
+    return fig, _holm(pd.DataFrame(rows))
+
+
 # ----------------------------------------------------------------------------
 # Offset statistics: PVA difference and offset difference between the channels
 # ----------------------------------------------------------------------------
@@ -214,12 +360,15 @@ def plot_abs_offset_diff(sess_manager, offset_unique):
 # ----------------------------------------------------------------------------
 # Activity during fast turns
 # ----------------------------------------------------------------------------
-def plot_turn_profiles(sess_manager, closed_loop=TURN_CLOSED_LOOP, dh_range=TURN_DH_RANGE):
-    """Turn-triggered EPG and EL bump profiles of the sessions with ``closed_loop == closed_loop``."""
+def plot_turn_profiles(sess_manager, closed_loop=TURN_CLOSED_LOOP, dh_range=TURN_DH_RANGE, alignment=TURN_ALIGNMENT):
+    """Turn-triggered EPG and EL bump profiles of the sessions with ``closed_loop == closed_loop``.
+
+    `alignment` is 'phase' (sub-ROI shift by the EPG bump phase) or 'max' (whole-ROI shift to the EPG peak).
+    """
     rows = sess_manager.sess_df.loc[sess_manager.sess_df['closed_loop'] == closed_loop]
     timeseries = (nmp.session.GetTS(sess_manager.load_row(row), channels=(0, 1), h_sigma=0.1, dh_sigma=0.3)
                   for _, row in rows.iterrows())
-    ccw, cw = nmp.dual_imaging.turn_triggered_profiles(timeseries, *dh_range)
+    ccw, cw = nmp.dual_imaging.turn_triggered_profiles(timeseries, *dh_range, alignment=alignment)
     fig, pva = nmp.dual_imaging.plot_turn_profiles(ccw, cw, colors=[CHANNEL_COLORS[c] for c in CHANNELS])
     fig.savefig(sess_manager.fig_folder / 'EPG_centered_turns.pdf', format='pdf', bbox_inches='tight')
     return fig, {name: {c: float(v) for c, v in zip(CHANNELS, angles, strict=True)} for name, angles in pva.items()}
@@ -334,6 +483,11 @@ def main(basedir=BASEDIR, figdir=DEFAULT_FIGDIR, session_figures=True):
     print(f'{offset_unique["fly_id"].nunique()} flies with closed loop and dark sessions')
     tables['pva_diff_tests'] = plot_pva_diff(sess_manager, offset_unique)[1]
     plot_abs_offset_diff(sess_manager, offset_unique)
+
+    grouped_bump = compute_bump_stats(sess_manager)
+    plot_bump_profiles(sess_manager, grouped_bump)
+    tables['bump_width_EL_vs_EPG'] = plot_bump_width_by_channel(sess_manager, grouped_bump)[1]
+    tables['bump_width_closed_loop_vs_dark'] = plot_bump_width_by_condition(sess_manager, grouped_bump)[1]
 
     _, pva = plot_turn_profiles(sess_manager)
     tables['turn_profile_pva'] = pd.DataFrame(pva).rename_axis('channel').reset_index()

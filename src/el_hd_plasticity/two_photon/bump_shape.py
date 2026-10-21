@@ -128,6 +128,30 @@ def mean_phase_null_profile(dff, rho_min=.05):
     return centered[rho > rho_min].mean(axis=0)
 
 
+def shift_by_phase(arr, sortby_index):
+    """Shift every time point (to sub-ROI precision) so the bump phase of one channel sits at the center ROI.
+
+    The first-harmonic phase of channel `sortby_index` is nulled with a phase ramp across spatial
+    frequencies, as in :func:`phase_null`, and the same shift is applied to all channels, so differences in
+    bump position between channels are preserved. Unlike :func:`shift_by_max` this does not snap to whole ROIs
+    and does not modify `arr`.
+
+    Args:
+        arr: (n_channels, n_rois, n_timepoints) array.
+        sortby_index: Channel whose bump phase defines the shift applied to all channels.
+
+    Returns:
+        New array of the same shape with the bump of channel `sortby_index` at the middle ROI
+        (``n_rois // 2``).
+    """
+    _, n_rois, _ = arr.shape
+    X = np.fft.fft(arr, axis=1)
+    phase = np.angle(X[sortby_index, 1, :])                                # (T,)
+    k = np.fft.fftfreq(n_rois, d=1 / n_rois)                               # integer harmonics, incl. negatives
+    X_shifted = X * np.exp(-1j * k[np.newaxis, :, np.newaxis] * phase[np.newaxis, np.newaxis, :])
+    return np.roll(np.real(np.fft.ifft(X_shifted, axis=1)), n_rois // 2, axis=1)
+
+
 def shift_by_max(arr, sortby_index):
     """Roll every time point so the peak ROI of one channel sits at the center ROI.
 

@@ -78,3 +78,18 @@ def test_mean_phase_null_profile_centers_peak_and_ignores_weak_frames():
     assert prof.shape == (n,) and np.argmax(prof) == n // 2
     flat = np.concatenate([dff, np.ones((n, 5))], axis=1)       # frames with no bump
     assert np.allclose(ra.mean_phase_null_profile(flat), prof)
+
+
+def test_shift_by_phase_centers_reference_channel_to_sub_roi_precision_and_keeps_relative_shift():
+    n = 16
+    ang = np.linspace(0, 2 * np.pi, n, endpoint=False)
+    centers = np.random.default_rng(1).uniform(0, 2 * np.pi, 40)
+    arr = np.stack([np.exp(2 * np.cos(ang[:, None] - centers[None, :])),
+                    np.exp(2 * np.cos(ang[:, None] - centers[None, :] - .5))])        # channel 1 lags by .5 rad
+    original = arr.copy()
+    out = ra.shift_by_phase(arr, 0)
+    assert np.array_equal(arr, original)                                              # input is not modified
+    _, phase_ref, *_ = ra.phase_null(out[0].T)
+    _, phase_other, *_ = ra.phase_null(out[1].T)
+    assert np.allclose(np.angle(np.exp(1j * (phase_ref - phase_ref[0]))), 0, atol=1e-8)   # same phase at every time
+    assert np.allclose(np.angle(np.exp(1j * (phase_other - phase_ref))), -.5, atol=1e-6)  # relative shift preserved
