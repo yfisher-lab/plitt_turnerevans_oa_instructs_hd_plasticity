@@ -9,6 +9,7 @@ condition key (e.g. ``'closed loop'``).
 """
 
 import numpy as np
+import scipy as sp
 from matplotlib import gridspec
 from matplotlib import pyplot as plt
 
@@ -16,19 +17,20 @@ from . import plotting, session, stats, utilities
 from .utilities import DEFAULT_OFFSET_BINS, DEFAULT_PLOT_TIMES
 
 
-def offset_stats(sess_cls):
+def offset_stats(session_manager, **ts_kwargs):
     """Compute offset statistics for each session.
 
     Computes circular statistics of offset (difference between heading and PVA)
     for each imaging session.
 
     Args:
-        sess_cls: SessionManager providing session metadata and data access.
+        session_manager: Session manager object.
+        **ts_kwargs: Passed to :meth:`session.SessionTimeseries.from_session`.
 
     Returns:
-        DataFrame with columns: fly_id, closed_loop, offset_var, offset_mean, offset_mag.
+        DataFrame with columns: fly_id, closed_loop, offset_mean, offset_mag.
     """
-    return stats.offset_stats(sess_cls.sess_df, sess_cls.load_row)
+    return stats.offset_stats(session_manager, **ts_kwargs)
 
 
 def offset_stats_unique(stats_df):
@@ -36,16 +38,20 @@ def offset_stats_unique(stats_df):
 
     Reduces multiple sessions per condition to single values by averaging, creating
     one row per condition per fly (closed loop: ``closed_loop >= 1``, dark: ``closed_loop == 0``). Requires
-    flies to have both closed-loop and dark data. Applies logit transform for mixed effects
-    modeling.
+    flies to have both closed-loop and dark data. Adds the circular variance of the offset
+    (``offset_var = 1 - offset_mag``, the mean over sessions) and its logit for mixed effects modeling.
 
     Args:
         stats_df: Output from offset_stats().
 
     Returns:
-        DataFrame with one row per condition per fly containing aggregated statistics.
+        DataFrame with one row per condition per fly: fly_id, closed_loop (1 = closed loop, 0 =
+        dark), dark, offset_mean, offset_mag, offset_var, offset_var_logit.
     """
-    return stats.offset_stats_unique(stats_df, dark_col=None)
+    unique = stats.offset_stats_unique(stats_df, dark_col=None)
+    unique['offset_var'] = 1 - unique['offset_mag']
+    unique['offset_var_logit'] = sp.special.logit(unique['offset_var'])
+    return unique
 
 
 def offset_stats_plot(stats_df_unique):
@@ -55,7 +61,7 @@ def offset_stats_plot(stats_df_unique):
         stats_df_unique: Output from offset_stats_unique().
 
     Returns:
-        DataFrame with one row per fly, columns for dark and cl values of each metric.
+        DataFrame with one row per fly and ``offset_mag_dark`` / ``offset_mag_closed_loop``.
     """
     return stats.offset_stats_plot(stats_df_unique)
 
@@ -97,7 +103,7 @@ def reformat_rho_stats_for_reg(grouped_stats, dh_bins):
     return df[['fly_id', 'closed_loop', 'rho', 'log_rho', 'dh', 'F', 'log_F']]
 
 
-def align_peaks_split_halves(sess_cls, rot_speed_mask=True, min_rot_speed=.5):
+def align_peaks_split_halves(session_manager, rot_speed_mask=True, min_rot_speed=.5):
     """Heading-aligned mean activity profile of the first and second half of each closed-loop session.
 
     For each closed-loop session the heading-aligned activity is averaged over the first and
@@ -106,7 +112,7 @@ def align_peaks_split_halves(sess_cls, rot_speed_mask=True, min_rot_speed=.5):
     the peak location is stable within a session.
 
     Args:
-        sess_cls: SessionManager providing session metadata and data access.
+        session_manager: Session manager object.
         rot_speed_mask: If True, only use time points with rotation speed above `min_rot_speed`.
         min_rot_speed: Rotation speed threshold (rad/s).
 
@@ -114,9 +120,9 @@ def align_peaks_split_halves(sess_cls, rot_speed_mask=True, min_rot_speed=.5):
         Tuple of two (n_sessions, n_rois) arrays: aligned first-half and second-half profiles.
     """
     first_half_aligned, second_half_aligned = [], []
-    for _, row in sess_cls.sess_df.iterrows():
+    for _, row in session_manager.iterrows():
         if row['closed_loop'] > 0:
-            ts = session.GetTS(sess_cls.load_row(row))
+            ts = session.GetTS(session_manager.load_row(row))
 
             if rot_speed_mask:
                 dh_mask = np.abs(ts.dh) > min_rot_speed
@@ -153,8 +159,8 @@ def plot_sess_heatmaps(ts_dict, vmin=-.5, vmax=.5, plot_times=DEFAULT_PLOT_TIMES
     Returns:
         Figure object.
     """
-    fig = plt.figure(figsize=[6, 4])
-    gs = gridspec.GridSpec(3, 1, height_ratios=[3, 1.5, 1.5], hspace=0.5)
+    fig = plt.figure(figsize=[7, 5.5])
+    gs = gridspec.GridSpec(3, 1, height_ratios=[3, 1.5, 1.5], hspace=0.35, top=.88)
 
     ax_heatmap = fig.add_subplot(gs[0])
     ax_heading = fig.add_subplot(gs[1], sharex=ax_heatmap)
@@ -194,10 +200,16 @@ def plot_sess_heatmaps(ts_dict, vmin=-.5, vmax=.5, plot_times=DEFAULT_PLOT_TIMES
 
         ax_heatmap.set_title(key)
 
+        # one shared time axis, labeled under the bottom row
+        for ax in (ax_heatmap, ax_heading):
+            ax.set_xlabel('')
+            ax.tick_params(labelbottom=False)
+        ax_dh.set_xlabel('Time (s)')
+
     # Plot all condition keys (skip 'fly' key)
     for key in ts_dict:
         if key == 'fly':
-            fig.suptitle(ts_dict[key])
+            fig.suptitle(ts_dict[key], y=.97)
         else:
             plot_rows(key)
 
@@ -292,7 +304,7 @@ def plot_sess_histograms(ts_dict, bins=DEFAULT_OFFSET_BINS,
     """
     keys = [key for key in ts_dict if key != 'fly']
     traces = [plotting.Trace.from_ts(key, ts_dict[key], cmap) for key in keys]
-    return plotting.plot_offset_histograms(traces, bins, hist_title=keys[-1], polar_title=ts_dict['fly'],
+    return plotting.plot_offset_histograms(traces, bins, hist_title=keys[-1], polar_title=None,
                                            suptitle=ts_dict['fly'], legend=False)
 
 
@@ -314,5 +326,5 @@ def plot_sess_heatmaps_w_hist(ts_dict, bins=DEFAULT_OFFSET_BINS, vmin=-.5, vmax=
     """
     traces = [plotting.Trace.from_ts('closed loop', ts_dict['closed loop'], cmap)]
     return plotting.plot_heatmaps_with_offset_hist(
-        traces, ts_dict['fly'], figsize=[8, 2], vmin=vmin, vmax=vmax, plot_times=plot_times,
+        traces, ts_dict['fly'], figsize=[8, 3.2], vmin=vmin, vmax=vmax, plot_times=plot_times,
         twindow=twindow, bins=bins, hist_xlim_zero=True)

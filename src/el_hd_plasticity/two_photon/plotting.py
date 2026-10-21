@@ -271,8 +271,8 @@ def plot_heatmaps_with_offset_hist(traces, title, figsize, vmin=-.5, vmax=3, plo
     if hist_xlim_zero:
         hist_axs[0].set_xlim(left=0)
 
-    fig.suptitle(title)
-    fig.subplots_adjust(top=.9)      # keep the figure title clear of the first row's titles
+    fig.suptitle(title, y=.995)
+    fig.subplots_adjust(top=1 - .6 / figsize[1], bottom=.7 / figsize[1])   # room for the figure title and the axis labels
     return fig, (heatmap_axs, hist_axs, cbar_ax)
 
 

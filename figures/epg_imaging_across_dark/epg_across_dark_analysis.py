@@ -124,7 +124,7 @@ def compute_offset_stats(sess_manager):
     return nmp.stats.offset_stats(sess_manager, meta_cols=META_COLS)
 
 
-def plot_pva_mag(sess_manager, offset_stats):
+def plot_offset_summary(sess_manager, offset_stats):
     """PVA magnitude (offset vector length) per fly, dark vs closed loop.
 
     Closed loop here is the mean over every closed-loop session (``closed_loop >= 1``), including the
@@ -323,7 +323,7 @@ def main(basedir=DEFAULT_BASEDIR, figdir=DEFAULT_FIGDIR, condition=CONDITION):
 
     summary = {}
     offset_stats = compute_offset_stats(sess_manager)
-    summary['pva_mag_dark_vs_closed_loop'] = plot_pva_mag(sess_manager, offset_stats)[1]
+    summary['pva_mag_dark_vs_closed_loop'] = plot_offset_summary(sess_manager, offset_stats)[1]
     summary['offset_cl1_vs_cl2'] = plot_offset_stability(sess_manager, offset_stats)[1]
     plot_dphi_vs_dheading(sess_manager)
     plot_rho_vs_dheading(sess_manager)

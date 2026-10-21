@@ -4,9 +4,9 @@ Sessions have two imaging channels (channel 0 = EPG, channel 1 = EL), so timeser
 carry per-channel ``dff``, ``phi``, ``rho`` and ``offset``. Statistics compare the two channels
 (offset difference, PVA difference, widths) in closed loop and in the dark.
 
-Two data sources are supported: preprocessed sessions listed in a session table (functions
-taking ``sess_df`` and ``load_row``) and Dan Turner-Evans' trial dictionaries (``*_DTE``
-functions).
+Two data sources are supported: preprocessed sessions managed by a
+:class:`~loading.SessionManager` (functions taking ``session_manager``) and Dan Turner-Evans' trial
+dictionaries (``*_DTE`` functions).
 """
 
 import numpy as np
@@ -14,8 +14,9 @@ import pandas as pd
 import scipy as sp
 from matplotlib import pyplot as plt
 from matplotlib.gridspec import GridSpec as GS
+from matplotlib.ticker import AutoMinorLocator
 
-from . import plotting, session, utilities
+from . import bump_shape, plotting, session, utilities
 from .utilities import DEFAULT_OFFSET_BINS, DEFAULT_PLOT_TIMES, binned_mean, wrap_angle
 
 CH_COLORS = ('Greys', 'Greens')  # default colormaps for (EPG, EL)
@@ -65,20 +66,19 @@ def offset_stats_DTE(data, channel_lookup):
     return pd.DataFrame(rows)
 
 
-def offset_stats(sess_df, load_row):
+def offset_stats(session_manager):
     """Compute two-channel offset statistics for each session.
 
     Args:
-        sess_df: Session DataFrame with fly_id and closed_loop columns.
-        load_row: Callable to load preprocessed data.
+        session_manager: Session manager object (session table with fly_id and closed_loop columns).
 
     Returns:
         DataFrame with fly_id, cl and the two-channel offset statistics.
     """
     rows = []
 
-    for _, row in sess_df.iterrows():
-        ts = session.GetTS(load_row(row), channels=[0, 1])
+    for _, row in session_manager.iterrows():
+        ts = session.GetTS(session_manager.load_row(row), channels=[0, 1])
         rows.append({'fly_id': row['fly_id'], 'cl': row['closed_loop'], **_offset_stats_row(ts)})
 
     return pd.DataFrame(rows)
@@ -156,12 +156,11 @@ def _rho_stats_binned(ts, dh_bins, abs):
     }
 
 
-def rho_stats(sess_df, load_row, dh_bins, abs=True):
+def rho_stats(session_manager, dh_bins, abs=True):
     """Compute rho (PVA magnitude) of both channels and the PVA difference binned by heading velocity.
 
     Args:
-        sess_df: Session DataFrame with fly_id and closed_loop columns.
-        load_row: Callable to load preprocessed data.
+        session_manager: Session manager object.
         dh_bins: Bin edges for heading velocity.
         abs: If True, bin by absolute heading velocity and use the absolute PVA difference.
 
@@ -170,8 +169,8 @@ def rho_stats(sess_df, load_row, dh_bins, abs=True):
     """
     rows = []
 
-    for _, row in sess_df.iterrows():
-        ts = session.GetTS(load_row(row), channels=[0, 1], dh_sigma=.3)
+    for _, row in session_manager.iterrows():
+        ts = session.GetTS(session_manager.load_row(row), channels=[0, 1], dh_sigma=.3)
         rows.append({'fly_id': row['fly_id'], 'cl': row['closed_loop'],
                      **_rho_stats_binned(ts, dh_bins, abs)})
 
@@ -183,31 +182,31 @@ def rho_stats_DTE(data, channel_lookup, dh_bins, abs=True):
     rows = []
 
     for fly, multitrial_dict in data.items():
+        flyname = fly.split("\\")[-1]
         for trial_dict in multitrial_dict.values():
             ts = session.GetTS_DTE(trial_dict, channel_lookup[fly], dh_sigma=.3)
-            rows.append({'fly_id': fly, 'cl': 1, **_rho_stats_binned(ts, dh_bins, abs)})
+            rows.append({'fly_id': flyname, 'cl': 1, **_rho_stats_binned(ts, dh_bins, abs)})
 
     return pd.DataFrame(rows)
 
 
-def pvdiff_rho_stats(sess_df, load_row, pv_bins):
+def pvdiff_rho_stats(session_manager, pv_bins):
     """Compute the PVA difference between channels binned by mean rho (PVA magnitude).
 
     Args:
-        sess_df: Session DataFrame with fly_id and closed_loop columns.
-        load_row: Callable to load preprocessed data.
-        pv_bins: Bin edges for the channel-averaged rho.
+        session_manager: Session manager object.
+        pv_bins: Bin edges for the channel-averaged rho; the last bin is open-ended.
 
     Returns:
         DataFrame with fly_id, cl and pva_diff (array, one value per bin).
     """
     rows = []
 
-    for _, row in sess_df.iterrows():
-        ts = session.GetTS(load_row(row), channels=[0, 1])
+    for _, row in session_manager.iterrows():
+        ts = session.GetTS(session_manager.load_row(row), channels=[0, 1])
 
         pva_diff = np.abs(wrap_angle(np.diff(ts.phi, axis=0))).ravel()
-        rho_dig = np.digitize(ts.rho.mean(axis=0), bins=pv_bins)
+        rho_dig = np.digitize(ts.rho.mean(axis=0), bins=pv_bins) - 1     # bin i = [pv_bins[i], pv_bins[i + 1])
 
         rows.append({
             'fly_id': row['fly_id'],
@@ -218,12 +217,11 @@ def pvdiff_rho_stats(sess_df, load_row, pv_bins):
     return pd.DataFrame(rows)
 
 
-def cross_corr_stats(sess_df, load_row, delays=None, times=None):
+def cross_corr_stats(session_manager, delays=None, times=None):
     """Compute the cross-correlation of the two channels' PVA as a function of delay.
 
     Args:
-        sess_df: Session DataFrame with fly_id and closed_loop columns.
-        load_row: Callable to load preprocessed data.
+        session_manager: Session manager object.
         delays: Integer sample delays applied to channel 2 (default -50..50).
         times: Times (s) at which to evaluate the interpolated correlation (default
             ``delays * 0.01``).
@@ -235,8 +233,8 @@ def cross_corr_stats(sess_df, load_row, delays=None, times=None):
     times = delays * 0.01 if times is None else times
     rows = []
 
-    for _, row in sess_df.iterrows():
-        ts = session.GetTS(load_row(row), channels=(0, 1))
+    for _, row in session_manager.iterrows():
+        ts = session.GetTS(session_manager.load_row(row), channels=(0, 1))
 
         r = np.array([np.abs(np.correlate(np.exp(1j * ts.phi[0, :]),
                                           np.exp(1j * np.roll(ts.phi[1, :], d)))
@@ -255,6 +253,80 @@ def cross_corr_stats(sess_df, load_row, delays=None, times=None):
         })
 
     return pd.DataFrame(rows)
+
+
+# ----------------------------------------------------------------------------
+# Activity during fast turns
+# ----------------------------------------------------------------------------
+def turn_triggered_profiles(timeseries, dh_min, dh_max, sortby_index=0):
+    """Mean bump profile of each channel during fast counter-clockwise and clockwise turns.
+
+    For every timeseries the time points with ``dh_min < dh < dh_max`` (counter-clockwise) or
+    ``-dh_max < dh < -dh_min`` (clockwise) are rolled so the peak of channel `sortby_index` sits at
+    the center ROI, averaged over time, and min-max normalized per channel. Timeseries without such
+    time points are skipped for that direction.
+
+    Args:
+        timeseries: Iterable of two-channel timeseries (``dff`` of shape (channels, ROIs, time) and ``dh``,
+            see :func:`session.GetTS` and :func:`session.GetTS_DTE` with ``dh_sigma=.3``).
+        dh_min, dh_max: Range of turning speeds (rad/s).
+        sortby_index: Channel whose peak defines the shift applied to both channels.
+
+    Returns:
+        Tuple (ccw, cw) of arrays of shape (n_timeseries, n_channels, n_rois).
+    """
+    ccw, cw = [], []
+    for ts in timeseries:
+        for mask, out in ((np.logical_and(ts.dh > dh_min, ts.dh < dh_max), ccw),
+                          (np.logical_and(ts.dh < -dh_min, ts.dh > -dh_max), cw)):
+            if mask.sum() > 0:
+                out.append(bump_shape.shift_by_max(ts.dff[:, :, mask], sortby_index).mean(axis=-1))
+
+    def normalize(arr):
+        arr = np.array(arr)
+        lo, hi = arr.min(axis=-1, keepdims=True), arr.max(axis=-1, keepdims=True)
+        return (arr - lo) / (hi - lo)
+
+    return normalize(ccw), normalize(cw)
+
+
+def plot_turn_profiles(ccw, cw, colors=('black', 'green')):
+    """Mean +- SEM turn-triggered bump profiles of both channels (EPG, EL), clockwise | counter-clockwise.
+
+    The line next to each profile marks its population-vector angle.
+
+    Args:
+        ccw, cw: Output of :func:`turn_triggered_profiles`.
+        colors: Colors of (EPG, EL).
+
+    Returns:
+        Tuple of (figure, pva) where pva maps 'clockwise' / 'counter-clockwise' to the PVA (rad) of
+        each channel's mean profile.
+    """
+    fig, axs = plt.subplots(1, 2, figsize=[5, 2.5], sharey=True)
+    n_rois = cw.shape[-1]
+    phases = np.linspace(-np.pi, np.pi, num=n_rois + 1)
+    phases = (phases[:-1] + phases[1:]) / 2
+    phases -= phases[utilities.HEADING_CENTER_ROI]
+    pva = {}
+
+    for ax, arr, name in ((axs[0], cw, 'clockwise'), (axs[1], ccw, 'counter-clockwise')):
+        mu, sem = arr.mean(axis=0), sp.stats.sem(arr, axis=0)
+        pva[name] = np.angle((mu * np.exp(1j * phases[np.newaxis, :])).mean(axis=-1))
+        for ch, (label, color) in enumerate(zip(('EPG', 'EL'), colors, strict=True)):
+            ax.plot(mu[ch], phases, color=color, label=label)
+            ax.fill_betweenx(phases, mu[ch] - sem[ch], mu[ch] + sem[ch], color=color, alpha=.3)
+            ax.plot([0, .3], [pva[name][ch]] * 2, color=color)
+        ax.set_title(f'{name} turns (n={len(arr)})', fontsize=9)
+        ax.set_xlabel('Norm. F')
+        ax.set_yticks([-np.pi, 0, np.pi], labels=[r'-$\pi$', '0', r'$\pi$'])
+        ax.yaxis.set_minor_locator(AutoMinorLocator())
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+    axs[0].set_ylabel('ROIs centered')
+    axs[0].legend()
+    fig.tight_layout()
+    return fig, pva
 
 
 # ----------------------------------------------------------------------------
