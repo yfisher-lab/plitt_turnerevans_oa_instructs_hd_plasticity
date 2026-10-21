@@ -134,6 +134,11 @@ def _profile_widths(dff):
     return bump_shape.mean_profile_fwhm(dff)
 
 
+def _shift_neural(x, dt, neural_shift):
+    """Circularly shift `x` along its last (time) axis by `neural_shift` seconds (aligns neural to behavior)."""
+    return np.roll(x, int(neural_shift / dt), axis=-1)
+
+
 def _smooth_activity(dff, dt, t_sigma, circ_sigma, neural_shift):
     """Gaussian smoothing in time and across the ring, then a time shift aligning neural to behavior.
 
@@ -148,7 +153,7 @@ def _smooth_activity(dff, dt, t_sigma, circ_sigma, neural_shift):
         dff = sp.ndimage.gaussian_filter1d(dff, t_sigma / dt, axis=-1)
     if circ_sigma > 0:
         dff = sp.ndimage.gaussian_filter1d(dff, circ_sigma, axis=-2, mode='wrap')
-    return np.roll(dff, int(neural_shift / dt), axis=-1)
+    return _shift_neural(dff, dt, neural_shift)
 
 
 # ----------------------------------------------------------------------------
@@ -326,12 +331,13 @@ class SessionTimeseries(EllipsoidBodyTimeseries):
 
         def outer_ring_ts(zscore):
             ts = np.squeeze(zscored_F('outer_ring', zscore))
-            return sp.ndimage.gaussian_filter1d(ts, t_sigma / dt, axis=-1) if t_sigma > 0 else ts
+            ts = sp.ndimage.gaussian_filter1d(ts, t_sigma / dt, axis=-1) if t_sigma > 0 else ts
+            return _shift_neural(ts, dt, neural_shift)
 
         dff = zscored_F('rois', True)[channels, :, :]
         return cls._from_arrays(dff=_smooth_activity(dff, dt, t_sigma, circ_sigma, neural_shift),
                                 heading=heading, time=time, dt=dt, h_sigma=h_sigma, dh_sigma=dh_sigma,
-                                pp=pp, dff_noz=zscored_F('rois', False)[channels, :, :],
+                                pp=pp, dff_noz=_shift_neural(zscored_F('rois', False)[channels, :, :], dt, neural_shift),
                                 outer_ring=outer_ring_ts(True), outer_ring_noz=outer_ring_ts(False))
 
 

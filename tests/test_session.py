@@ -231,3 +231,11 @@ def test_objects_compare_by_identity_not_by_array_contents(pp):
     a, b = tp.session.GetTS(pp), tp.session.GetTS(pp)
     assert a == a and a != b                          # no elementwise array comparison
     assert len({a, b}) == 2                           # hashable
+
+
+def test_neural_shift_applies_to_dff_noz_and_outer_ring(pp):
+    base = tp.session.GetTS(pp, neural_shift=0)
+    shifted = tp.session.GetTS(pp, neural_shift=-.2)
+    k = int(-.2 / base.dt)
+    for name in ('dff', 'dff_noz', 'outer_ring', 'outer_ring_noz'):
+        assert np.allclose(getattr(shifted, name), np.roll(getattr(base, name), k, axis=-1)), name
