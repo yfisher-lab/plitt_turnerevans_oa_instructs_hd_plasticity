@@ -83,7 +83,8 @@ class SessionManager:
             figfolder=None, 
             mkdir=True, 
             id_cols=None, 
-            extra_cols=None):
+            extra_cols=None,
+            usable_only=True):
         """Initialize session manager.
 
         Args:
@@ -100,6 +101,8 @@ class SessionManager:
                 conditions or experiments distinct when their tables are pooled.
             extra_cols: Optional dict of constant columns to add to the session table, e.g.
                 ``{'grab': 'DA'}`` to label every session of a dataset; they can be used in `id_cols`.
+            usable_only: If True (default), keep only the sessions with ``usable == 1``. Pass False for tables
+                in which ``usable`` is only filled in for the sessions that were flagged.
         """
         self.basedir = pathlib.Path(basedir)
         self._sess_df = pd.read_csv(self.basedir / 'sessions.csv')
@@ -118,7 +121,8 @@ class SessionManager:
                 self.fig_folder.mkdir(parents=True, exist_ok=True)
 
         self.add_fly_id()
-        self.filter_usable()
+        if usable_only:
+            self.filter_usable()
         self.load_row = make_load_row(basedir=self.basedir, folder_cols=folder_cols)
         
 

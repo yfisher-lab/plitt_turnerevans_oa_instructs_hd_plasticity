@@ -11,12 +11,15 @@ Figures take ``ts_dict``: a dict with a ``'fly'`` name and :class:`session.Sessi
 ``'baseline'``, ``'post_0deg'`` and ``'post_180deg'``.
 """
 
+import pathlib
+
 import numpy as np
 import pandas as pd
 import scipy as sp
+import seaborn as sns
 from matplotlib import pyplot as plt
 
-from . import plotting
+from . import plotting, session, stats
 from .utilities import (
     DEFAULT_OFFSET_BINS,
     DEFAULT_PLOT_TIMES,
@@ -100,21 +103,25 @@ def get_opto_resp(pp, zscore=False):
     return opto_resp
 
 
-def stack_opto_responses(df, load_row, condition, folder, scan_type):
-    """Stack z-scored opto responses of all sessions of a condition and scan type.
+def opto_responses_by_fly(session_manager, condition, scan_type, zscore=False):
+    """Per-fly optogenetic responses of one condition and scan type.
 
     Args:
-        df: Session table with condition, scan_type and folder columns.
-        load_row: Callable loading a preprocessed session from a table row.
+        session_manager: Session manager object whose session table has ``condition`` and ``scan_type`` columns.
         condition: Value of the ``condition`` column to select.
-        folder: Value of the ``folder`` column to select.
-        scan_type: Value of the ``scan_type`` column to select.
+        scan_type: Value of the ``scan_type`` column to select (e.g. 'remap_0deg').
+        zscore: Passed to :func:`get_opto_resp`.
 
     Returns:
-        Array of shape (n_sessions, n_rois, n_points, n_reps); see :func:`get_opto_resp`.
+        Dict fly_id -> array of shape (n_rois, n_points, n_reps), averaged over the fly's sessions.
     """
-    sel = df.loc[(df['condition'] == condition) & (df['scan_type'] == scan_type) & (df['folder'] == folder)]
-    return np.stack([get_opto_resp(load_row(row), zscore=True) for _, row in sel.iterrows()])
+    df = session_manager.sess_df
+    sel = df.loc[(df['condition'] == condition) & (df['scan_type'] == scan_type)]
+    responses = {}
+    for fly, fly_df in sel.groupby('fly_id', sort=False):
+        responses[fly] = np.mean([get_opto_resp(session_manager.load_row(row), zscore=zscore)
+                                  for _, row in fly_df.iterrows()], axis=0)
+    return responses
 
 
 def get_mu_sem(opto_resp_al, condition, scan_type):
@@ -138,30 +145,6 @@ def get_mu_sem(opto_resp_al, condition, scan_type):
 # ----------------------------------------------------------------------------
 # Per-fly offset summaries
 # ----------------------------------------------------------------------------
-def load_sess_df(basedir, folder):
-    """Load ``<basedir>/sessions.csv`` and add the columns used by the remapping analyses.
-
-    Args:
-        basedir: pathlib.Path of the experiment folder containing sessions.csv.
-        folder: Label of this experiment folder, used to tell pooled experiments apart.
-
-    Returns:
-        Session DataFrame with a unique ``fly_id`` (date, fly, condition, folder), empty
-        'mean offset' / 'offset var.' / 'mean vec. len' columns to be filled per scan, and
-        ``folder`` and ``basedir`` columns.
-    """
-    sess_df = pd.read_csv(basedir / 'sessions.csv')
-
-    sess_df['fly_id'] = [row['date'] + '_' + row['fly'] + '_' + row['condition'] + '_' + folder
-                         for _, row in sess_df.iterrows()]
-    sess_df['mean offset'] = np.nan
-    sess_df['offset var.'] = np.nan
-    sess_df['mean vec. len'] = np.nan
-    sess_df['folder'] = folder
-    sess_df['basedir'] = str(basedir)
-    return sess_df
-
-
 def build_sum_stats(df, fly_list, conditions=None, scan_types=None, extra_metrics=()):
     """Average the per-scan offset summaries of each fly, one column per scan type and statistic.
 
@@ -376,3 +359,320 @@ def plot_sess_heatmaps_w_hist(ts_dict, bins=DEFAULT_OFFSET_BINS, vmin=-.5, vmax=
         _scan_traces(ts_dict), ts_dict['fly'], figsize=[8, 6], vmin=vmin, vmax=vmax,
         plot_times=plot_times, twindow=twindow, bins=bins, slots=sess_order,
         share_axes=True, hist_xlim_zero=True)
+
+
+# ----------------------------------------------------------------------------
+# Experiment-level analyses (shared by the remapping figure scripts)
+# ----------------------------------------------------------------------------
+# Groups are :class:`group_comparison.Group` objects whose ``value`` is the ``condition`` of the session table; groups
+# whose value contains 'novis' were not shown a visual cue (post_novis1 / post_novis2 scans, remap_novis opto scans).
+OPTO_SCANS = ('remap_0deg', 'remap_180deg')
+NOVIS_OPTO_SCAN = 'remap_novis'
+OFFSET_SCAN_TYPES = ('baseline', 'post_0deg', 'post_180deg', 'post_novis1', 'post_novis2')
+OPTO_PANELS = (('remap_0deg', 'PuRd', 'remap 0'), ('remap_180deg', 'GnBu', 'remap pi'), ('combined', 'Greys', 'combined'))
+N_STIM_POINTS = 8
+
+
+def is_novis(group):
+    """True for groups that were not shown a visual cue."""
+    return 'novis' in group.value
+
+
+class _Rows:
+    """The rows of a session manager selected by a boolean mask (enough of its interface for the statistics)."""
+
+    def __init__(self, session_manager, mask):
+        self._df = session_manager.sess_df.loc[mask]
+        self.load_row = session_manager.load_row
+
+    def iterrows(self):
+        return self._df.iterrows()
+
+
+def session_offset_summary(session_manager, scan_types=OFFSET_SCAN_TYPES):
+    """Per-session offset summary of the scans without optogenetic stimulation.
+
+    Returns:
+        DataFrame with fly_id, condition, scan_type and the columns 'mean offset' (circular mean of the offset),
+        'mean vec. len' and 'offset var.' used by :func:`build_sum_stats`.
+    """
+    rows = _Rows(session_manager, session_manager.sess_df['scan_type'].isin(scan_types))
+    summary = stats.add_offset_var(stats.offset_stats(rows, meta_cols=('fly_id', 'condition', 'scan_type')))
+    return summary.drop(columns='offset_var_logit').rename(columns={
+        'offset_mean': 'mean offset', 'offset_mag': 'mean vec. len', 'offset_var': 'offset var.'})
+
+
+def sum_stats_by_group(summary, groups):
+    """Per-fly summaries (:func:`build_sum_stats`) of each group: ``{group value: DataFrame}``."""
+    out = {}
+    for group in groups:
+        flies = summary.loc[summary['condition'] == group.value, 'fly_id'].unique()
+        scan_types = NOVIS_SCAN_TYPES if is_novis(group) else STANDARD_SCAN_TYPES
+        out[group.value] = build_sum_stats(summary, flies, conditions=[group.value] * len(flies), scan_types=scan_types)
+    return out
+
+
+def compute_opto_responses(session_manager, groups, zscore=False):
+    """Optogenetic responses of every group, averaged per fly: ``{group value: {scan: array}}``.
+
+    Arrays have shape (n_flies, n_rois, n_points, n_reps). Groups shown a visual cue have 'remap_0deg', 'remap_180deg'
+    and 'combined' (the mean of the two, for flies with both); no-visual-cue groups have 'remap_novis' and
+    'combined' (the same array).
+    """
+    out = {}
+    for group in groups:
+        scans = (NOVIS_OPTO_SCAN,) if is_novis(group) else OPTO_SCANS
+        per_fly = {scan: opto_responses_by_fly(session_manager, group.value, scan, zscore) for scan in scans}
+        resp = {scan: np.stack(list(flies.values())) for scan, flies in per_fly.items()}
+        if len(scans) == 2:
+            both = [fly for fly in per_fly[scans[0]] if fly in per_fly[scans[1]]]
+            resp['combined'] = np.stack([(per_fly[scans[0]][fly] + per_fly[scans[1]][fly]) / 2 for fly in both])
+        else:
+            resp['combined'] = resp[scans[0]]
+        out[group.value] = resp
+    return out
+
+
+def align_opto_responses(opto):
+    """Roll the responses to each stimulus location so that the stimulated position is at the middle ROI."""
+    aligned = {}
+    for group, scans in opto.items():
+        aligned[group] = {}
+        for scan, arr in scans.items():
+            arr = np.copy(arr)
+            for i in range(N_STIM_POINTS):
+                arr[:, :, i, :] = np.roll(arr[:, :, i, :], 2 * i - 8, axis=1)
+            aligned[group][scan] = arr
+    return aligned
+
+
+def _style_resp_axis(ax):
+    plotting.despine(ax)
+    ax.set_ylabel('Z-scored F')
+    ax.set_xlabel('ROIs')
+    ax.set_xticks([-np.pi, 0, np.pi], labels=[r'-$\pi$', '0', r'$\pi$'])
+
+
+def plot_opto_heatmaps(figdir, opto, groups, filename='opto_resp_heatmaps.pdf'):
+    """Mean optogenetic response (ROIs x stimulus location) of each group: remap 0 | remap pi | combined."""
+    fig, axs = plt.subplots(len(groups), 3, figsize=[12, 4.5 * len(groups)], sharex=True, sharey=True, squeeze=False)
+    for row, group in enumerate(groups):
+        for col, (scan, cmap, label) in enumerate(OPTO_PANELS):
+            ax = axs[row, col]
+            if is_novis(group) and scan != 'combined':
+                ax.axis('off')
+                continue
+            h = ax.imshow(np.nanmean(opto[group.value][scan], axis=(0, 3)), aspect=.5, vmin=-.5, vmax=.5, cmap=cmap)
+            fig.colorbar(h, ax=ax)
+            ax.set_title(f'{group.label}: {label}' if scan != 'combined' else f'{group.label}: combined', fontsize=9)
+            ax.set_ylabel('ROIs')
+            ax.set_xlabel('Stim. Location')
+            ax.set_xticks([0, 2, 4, 6], labels=[r'0', r'$\pi$/2', r'$\pi$', r'3$\pi$/2'])
+            ax.set_yticks([-.5, 7.5, 15.5], labels=[r'0', r'$\pi$', r'2$\pi$'])
+            if not is_novis(group) and scan != 'combined':           # position of the stimulus
+                y = np.arange(0, 2 * np.pi, np.pi / 4)[::-1] * 8 / np.pi + .5
+                ax.scatter(np.arange(N_STIM_POINTS), y if scan == 'remap_0deg' else np.roll(y, 4), color='orange', s=40)
+    fig.tight_layout()
+    fig.savefig(pathlib.Path(figdir) / filename, bbox_inches='tight')
+    return fig
+
+
+def plot_opto_by_location(figdir, opto, groups, filename='opto_resp_by_location.pdf'):
+    """Mean +- SEM optogenetic response of each group (ROIs on the x axis) at each of the 8 stimulus locations."""
+    fig, axs = plt.subplots(2, N_STIM_POINTS, figsize=[16, 4.5], sharey=True)
+    x = np.arange(16)
+    for row, scan in enumerate(OPTO_SCANS):
+        for group in groups:
+            arr = opto[group.value][scan].mean(axis=3)               # flies x rois x points
+            mu, sem = arr.mean(axis=0), sp.stats.sem(arr, axis=0)
+            for i in range(N_STIM_POINTS):
+                axs[row, i].plot(x, mu[:, i], color=group.color, label=group.label)
+                axs[row, i].fill_between(x, mu[:, i] - sem[:, i], mu[:, i] + sem[:, i], color=group.color, alpha=.5)
+    labels = ['0', r'$\pi$/4', r'$\pi$/2', r'3$\pi$/4', r'$\pi$', r'5$\pi$/4', r'3$\pi$/2', r'7$\pi$/4']
+    for ax in axs.flat:
+        plotting.despine(ax)
+        ax.set_xticks([-.5, 7.5, 15.5], labels=[r'0', r'$\pi$', r'2$\pi$'])
+        ax.set_xlabel('ROIs')
+    for i, label in enumerate(labels):
+        axs[0, i].set_title(label, fontsize=9)
+    axs[0, 0].set_ylabel('remap 0')
+    axs[1, 0].set_ylabel('remap pi')
+    axs[0, 0].legend(fontsize=7)
+    fig.tight_layout()
+    fig.savefig(pathlib.Path(figdir) / filename, bbox_inches='tight')
+    return fig
+
+
+def plot_aligned_opto(figdir, aligned, groups, filename='aligned_opto_resp.pdf'):
+    """Mean +- SEM response aligned to the stimulated position (ROIs centered), per group: remap 0 | remap pi | combined."""
+    fig, axs = plt.subplots(1, 3, figsize=[12, 4])
+    x = np.linspace(-np.pi, np.pi, num=16)
+    for ax, (scan, _, label) in zip(axs, OPTO_PANELS, strict=True):
+        for group in groups:
+            if is_novis(group) and scan != 'combined':
+                continue
+            resp = aligned[group.value][scan].mean(axis=(2, 3))
+            mu, sem = resp.mean(axis=0), sp.stats.sem(resp, axis=0)
+            ax.plot(x, mu, color=group.color, label=f'{group.label} (n={len(resp)})')
+            ax.fill_between(x, mu - sem, mu + sem, color=group.color, alpha=.2)
+        ax.set_title(label)
+        _style_resp_axis(ax)
+    axs[2].legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(pathlib.Path(figdir) / filename, bbox_inches='tight')
+    return fig
+
+
+def aligned_window_tests(aligned, groups, reference, window=slice(7, 10)):
+    """Mann-Whitney tests of the combined aligned response around the stimulated position, `reference` vs each other group.
+
+    The response of each fly is averaged over the ROIs in `window` (by default the three around the stimulated
+    position). p-values are Holm-corrected across the comparisons.
+    """
+    resp = {g.value: aligned[g.value]['combined'].mean(axis=(2, 3))[:, window].mean(axis=-1) for g in groups}
+    ref_label = next(g.label for g in groups if g.value == reference)
+    rows = []
+    for group in groups:
+        if group.value == reference:
+            continue
+        u, p = sp.stats.mannwhitneyu(resp[reference], resp[group.value])
+        rows.append({'comparison': f'{ref_label} vs {group.label}', 'U': float(u), 'p': float(p)})
+    return stats.add_holm(pd.DataFrame(rows))
+
+
+def plot_vec_len_comparison(figdir, summary, groups, filename='remapping_vec_len_comparison.pdf'):
+    """Offset vector length of every session by scan type and group (points, and the mean as a bar)."""
+    order = [s for s in OFFSET_SCAN_TYPES if s in set(summary['scan_type'])]
+    data = summary.loc[summary['condition'].isin([g.value for g in groups]) & summary['scan_type'].isin(order)]
+    kw = {'data': data, 'x': 'scan_type', 'y': 'mean vec. len', 'hue': 'condition', 'order': order,
+          'hue_order': [g.value for g in groups], 'palette': {g.value: g.color for g in groups}}
+    fig, ax = plt.subplots(figsize=[6, 4])
+    sns.stripplot(**kw, ax=ax, alpha=.5, dodge=True, s=8, legend=False)
+    sns.pointplot(**kw, ax=ax, estimator=np.mean, errorbar=None, marker='_', markersize=20, markeredgewidth=6,
+                  dodge=.4 if len(groups) > 1 else False, linestyle='none', legend=False)
+    for group in groups:
+        ax.plot([], [], color=group.color, linewidth=4, label=group.label)
+    ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), frameon=False)
+    ax.set_xlabel('')
+    ax.set_ylabel('offset vector length')
+    ax.set_ylim([0, 1])
+    plotting.despine(ax)
+    fig.tight_layout()
+    fig.savefig(pathlib.Path(figdir) / filename, bbox_inches='tight')
+    return fig
+
+
+def mean_offsets(sum_stats):
+    """Across-fly mean offset vector (angle and length) of each scan type of each group, as a table."""
+    rows = []
+    for group, df in sum_stats.items():
+        scans = NOVIS_SCAN_TYPES if 'post_novis1 mean offset' in df.columns else STANDARD_SCAN_TYPES
+        for scan in scans:
+            v = (df[f'{scan} vec. len'] * np.exp(1j * df[f'{scan} mean offset'])).mean()
+            rows.append({'group': group, 'scan_type': scan, 'n_flies': int(df[f'{scan} mean offset'].notna().sum()),
+                         'mean_offset': float(np.angle(v)), 'mean_vec_len': float(np.abs(v))})
+    return pd.DataFrame(rows)
+
+
+def plot_polar_summary(figdir, sum_stats, groups, filename='remapping_all_flies_polar.pdf'):
+    """Offset vector of every fly and their mean, one row per group: baseline | after the cues."""
+    fig, axs = plt.subplots(len(groups), 2, subplot_kw={'projection': 'polar'}, figsize=[8, 4.5 * len(groups)],
+                            squeeze=False)
+    for row, group in enumerate(groups):
+        plot_row_sum_stats(sum_stats[group.value], axs, row, group.value, novis=is_novis(group))
+        for col in range(2):
+            axs[row, col].set_title(group.label)
+    fig.tight_layout()
+    fig.savefig(pathlib.Path(figdir) / filename, bbox_inches='tight')
+    return fig
+
+
+def plot_min_dist_summary(figdir, sum_stats, groups, zero_groups=(), filename='remapping_all_flies.pdf'):
+    """Mean offset of every fly at baseline and after the two cues, one panel per group.
+
+    `zero_groups` lists the values of the groups whose first post-cue offset is also unwrapped toward baseline
+    (see :func:`plot_min_dist`).
+    """
+    fig, axs = plt.subplots(1, len(groups), figsize=[4 * len(groups), 4], sharex=True, sharey=True, squeeze=False)
+    for ax, group in zip(axs[0], groups, strict=True):
+        plot_min_dist(sum_stats[group.value], ax, color=group.color, zero=group.value in zero_groups)
+        ax.set_title(group.label)
+        ax.set_xticks([0, 1, 2], ['baseline', 'post 0deg', 'post 180deg'] if not is_novis(group)
+                      else ['baseline', 'post novis 1', 'post novis 2'])
+        ax.set_yticks([-np.pi, 0, np.pi], [r'-$\pi$', '0', r'$\pi$'])
+        ax.set_ylabel('Mean Offset')
+        plotting.despine(ax)
+    fig.tight_layout()
+    fig.savefig(pathlib.Path(figdir) / filename, bbox_inches='tight')
+    return fig
+
+
+def plot_remap_error(figdir, sum_stats, groups, reference, filename='remapping_error.pdf'):
+    """Average remapping error of every fly (see :func:`avg_diff`), per group, with tests.
+
+    Each group is tested against chance (pi/2, Wilcoxon) and `reference` against every other group
+    (Mann-Whitney); both families are Holm-corrected.
+
+    Returns:
+        Tuple of (figure, DataFrame of tests).
+    """
+    errors = {g.value: avg_diff(sum_stats[g.value]).dropna() for g in groups}
+    fig, ax = plt.subplots(figsize=[1.4 * len(groups) + .6, 3.5])
+    for i, group in enumerate(groups):
+        err = errors[group.value]
+        ax.scatter(i + np.linspace(0, .1, num=len(err)), err, color=group.color, alpha=.3, s=80)
+        ax.plot([i - .05, i + .15], err.mean() * np.ones(2), color=group.color, linewidth=8)
+    ax.axhline(np.pi / 2, color='k', linestyle='--', alpha=.5, zorder=-1)
+    ax.set_xticks(np.arange(len(groups)) + .05, labels=[g.label for g in groups], fontsize=8)
+    ax.set_ylabel('Avg remapping error')
+    ax.set_yticks([0, np.pi / 4, np.pi / 2, 3 * np.pi / 4, np.pi],
+                  labels=[0, r'$\pi$/4', r'$\pi$/2', r'$3\pi$/4', r'$\pi$'])
+    plotting.despine(ax)
+    fig.tight_layout()
+    fig.savefig(pathlib.Path(figdir) / filename, bbox_inches='tight')
+
+    rows = [{'family': 'error vs chance', 'comparison': g.label, 'n': len(errors[g.value]),
+             **{k: v for k, v in stats.wilcoxon_vs(errors[g.value], np.pi / 2).items() if k != 'n'}} for g in groups]
+    ref_label = next(g.label for g in groups if g.value == reference)
+    for group in groups:
+        if group.value != reference:
+            u, p = sp.stats.mannwhitneyu(errors[reference], errors[group.value])
+            rows.append({'family': 'error between groups', 'comparison': f'{ref_label} vs {group.label}',
+                         'W': float(u), 'p': float(p)})
+    tests = pd.DataFrame(rows)
+    tests['p_holm'] = np.nan
+    for _, sub in tests.groupby('family'):
+        tests.loc[sub.index, 'p_holm'] = stats.add_holm(sub.copy())['p_holm']
+    return fig, tests
+
+
+def plot_session_figures(figdir, session_manager, groups, vmin=-.5, vmax=3, close=True):
+    """Heatmaps with offset histograms, offset histograms and polar plots of the baseline and two post-cue scans of each fly.
+
+    Flies need all three scans. The rows of the heatmap figure follow the order in which the scans were acquired
+    (the last three digits of the session name). Figures go to ``<figdir>/sessions/<fly_id>/``.
+
+    Returns:
+        List of the fly ids plotted.
+    """
+    sess_df = session_manager.sess_df
+    plotted = []
+    for fly in sess_df.loc[sess_df['condition'].isin([g.value for g in groups]), 'fly_id'].unique():
+        fly_df = sess_df.loc[sess_df['fly_id'] == fly]
+        scans = {s: fly_df.loc[fly_df['scan_type'] == s] for s in STANDARD_SCAN_TYPES}
+        if any(len(df) == 0 for df in scans.values()):
+            continue
+        ts_dict = {'fly': fly, **{s: session.GetTS(session_manager.load_row(df.iloc[0])) for s, df in scans.items()}}
+        sess_order = np.argsort([int(scans[s].iloc[0]['session'][-3:]) for s in STANDARD_SCAN_TYPES])
+
+        folder = pathlib.Path(figdir) / 'sessions' / fly
+        folder.mkdir(parents=True, exist_ok=True)
+        fig, _ = plot_sess_heatmaps_w_hist(ts_dict, vmin=vmin, vmax=vmax, sess_order=sess_order)
+        fig.savefig(folder / 'heatmaps.pdf', bbox_inches='tight')
+        (fig_hist, _), (fig_polar, _) = plot_sess_histograms(ts_dict)
+        fig_hist.savefig(folder / 'offset_hist.pdf', bbox_inches='tight')
+        fig_polar.savefig(folder / 'offset_polar.pdf', bbox_inches='tight')
+        plotted.append(fly)
+        if close:
+            plt.close('all')
+    return plotted
