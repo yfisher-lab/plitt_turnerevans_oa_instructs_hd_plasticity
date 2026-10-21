@@ -30,6 +30,7 @@ REFERENCE = 'rnai_67968'                          # baseline group of the PVA ve
 MIN_CL = nmp.tbh_rnai.MIN_CL                      # closed-loop blocks of experience for a session to count as closed loop
 RHO_BINS = np.linspace(0, 3.14, num=20)           # bins of absolute rotation speed (rad/s)
 DPHI_BINS = np.linspace(-2, 2, num=20)            # bins of signed rotation speed (rad/s)
+WIDTH_CL_BLOCKS = (2,)                            # closed-loop blocks used for the bump width
 
 
 def load_session_manager(basedir=BASEDIR, figdir=DEFAULT_FIGDIR):
@@ -77,6 +78,13 @@ def dphi_analysis(sess_manager):
     return grouped, nmp.group_comparison.dphi_regression_tests(grouped, GROUP_COL, GROUPS, REFERENCE, DPHI_BINS)
 
 
+def width_analysis(sess_manager):
+    """Bump width, dark vs closed loop, per group."""
+    widths = nmp.group_comparison.compute_widths(sess_manager, GROUP_COL, WIDTH_CL_BLOCKS)
+    nmp.group_comparison.plot_widths(sess_manager.fig_folder, widths, GROUP_COL, GROUPS)
+    return widths, {'bump_width_tests': nmp.group_comparison.width_tests(widths, GROUP_COL, GROUPS)}
+
+
 def plot_session_figures(sess_manager):
     """Closed-loop and dark heatmaps with offset histograms of every fly."""
     return nmp.group_comparison.plot_session_figures(sess_manager.fig_folder, sess_manager, min_closed_loop=MIN_CL)
@@ -88,7 +96,7 @@ def main(basedir=BASEDIR, figdir=DEFAULT_FIGDIR, session_figures=True):
     sess_manager = load_session_manager(basedir, figdir)
     print(f'{sess_manager.sess_df["fly_id"].nunique()} flies, {len(sess_manager.sess_df)} sessions')
     tables = {}
-    for analysis in (offset_analysis, rho_analysis, dphi_analysis):
+    for analysis in (offset_analysis, rho_analysis, dphi_analysis, width_analysis):
         tables.update(analysis(sess_manager)[1])
     if session_figures:
         print(f'{len(plot_session_figures(sess_manager))} flies with session figures')

@@ -71,7 +71,7 @@ def dphi_analysis(sess_manager):
 def width_analysis(sess_manager):
     """Bump width, dark vs closed loop, per group."""
     widths = nmp.group_comparison.compute_widths(sess_manager, GROUP_COL, WIDTH_CL_BLOCKS)
-    nmp.group_comparison.plot_widths(sess_manager.fig_folder, widths, GROUP_COL, GROUPS)
+    nmp.group_comparison.plot_widths(sess_manager.fig_folder, widths, GROUP_COL, GROUPS, ylims = (np.pi/2, np.pi+.1))
     return widths, {'bump_width_tests': nmp.group_comparison.width_tests(widths, GROUP_COL, GROUPS)}
 
 

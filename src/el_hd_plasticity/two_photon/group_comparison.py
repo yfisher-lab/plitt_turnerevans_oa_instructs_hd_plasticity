@@ -96,10 +96,13 @@ def paired_group_panels(figdir, df, group_col, groups, ycol, ylabel, ylim, filen
     return fig
 
 
-def plot_offset_mag(figdir, offset_unique, group_col, groups, filename='offset_mag_summary.pdf'):
+def plot_offset_mag(figdir, offset_unique, group_col, groups, filename='offset_mag_summary.pdf', ylims = None):
     """Offset vector length per fly, dark vs closed loop, one panel per group."""
+    if ylims is None:
+        ylims = [0, 1]
+
     return paired_group_panels(figdir, offset_unique, group_col, groups, 'offset_mag', 'offset vector length',
-                               [0, 1], filename, yticks=[0, .2, .4, .6, .8, 1.])
+                               ylims, filename, yticks=[0, .2, .4, .6, .8, 1.])
 
 
 def plot_offset_polar(figdir, offset_unique, group_col, groups, filename='offset_hist_summary.pdf'):
@@ -333,13 +336,15 @@ def compute_widths(session_manager, group_col, closed_loop_blocks=(1,), rho_min=
     return widths.join(group).reset_index()[['fly_id', group_col, 'cl_width', 'dark_width']]
 
 
-def plot_widths(figdir, widths, group_col, groups, filename='bump_width_dark_v_closed_loop.pdf', connect=True):
+def plot_widths(figdir, widths, group_col, groups, ylims = None, filename='bump_width_dark_v_closed_loop.pdf', connect=True):
     """Bump width per fly, dark vs closed loop, one panel per group."""
+    if ylims is None:
+        ylims = (np.pi/2, np.pi)
     long = widths.melt(id_vars=['fly_id', group_col], value_vars=['dark_width', 'cl_width'], var_name='which_width',
                        value_name='width')
     long['closed_loop'] = (long['which_width'] == 'cl_width').astype(int)
     return paired_group_panels(figdir, long, group_col, groups, 'width', 'bump FWHM (rad)',
-                               [np.pi / 2, np.pi], filename, yticks=[np.pi / 2, 3 * np.pi / 4, np.pi],
+                               ylims, filename, yticks=[np.pi / 2, 3 * np.pi / 4, np.pi],
                                yticklabels=[r'$\pi$/2', r'$3\pi$/4', r'$\pi$'], connect=connect)
 
 
