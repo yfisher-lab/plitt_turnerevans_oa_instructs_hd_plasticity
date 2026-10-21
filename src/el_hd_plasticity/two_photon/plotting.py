@@ -228,7 +228,7 @@ def plot_heatmaps_with_offset_hist(traces, title, figsize, vmin=-.5, vmax=3, plo
     n = len(traces)
     slots = range(n) if slots is None else slots
     fig = plt.figure(figsize=figsize)
-    gs = GS(n, 4, figure=fig, width_ratios=[6, 1, .8, .2], wspace=.05, hspace=.8)
+    gs = GS(n, 4, figure=fig, width_ratios=[6, 1, .8, .2], wspace=.25, hspace=.8)
     heatmap_axs = [fig.add_subplot(gs[0, 0])]
     heatmap_axs.extend([fig.add_subplot(gs[i, 0], sharey=heatmap_axs[0] if share_axes else None)
                         for i in range(1, n)])
@@ -263,14 +263,16 @@ def plot_heatmaps_with_offset_hist(traces, title, figsize, vmin=-.5, vmax=3, plo
         _format_offset_hist_panel(hist_axs[row], xticks=hist_xticks)
 
         if hist_title == 'variance':
-            hist_axs[row].set_title(f"variance={sp.stats.circvar(tr.offset, low=-np.pi, high=np.pi):.2f}")
+            hist_axs[row].set_title(f"variance={sp.stats.circvar(tr.offset, low=-np.pi, high=np.pi):.2f}",
+                                    fontsize=8)
         else:
-            hist_axs[row].set_title(f"vec length={np.abs(tr.offset_c.mean()):.2f}")
+            hist_axs[row].set_title(f"vec length={np.abs(tr.offset_c.mean()):.2f}", fontsize=8)
 
     if hist_xlim_zero:
         hist_axs[0].set_xlim(left=0)
 
     fig.suptitle(title)
+    fig.subplots_adjust(top=.9)      # keep the figure title clear of the first row's titles
     return fig, (heatmap_axs, hist_axs, cbar_ax)
 
 
@@ -330,13 +332,14 @@ def plot_offset_histograms(traces, bins=DEFAULT_OFFSET_BINS, hist_title=None, po
     fig_hist.tight_layout()
 
     ax_polar.set_xticks([0, np.pi/2, np.pi, 3*np.pi/2], ['0', r'$\pi$/2', r'$\pi$', r'3$\pi$/2'])
-    ax_polar.set_yticks([0, .2, .4, .6, .8])
+    ax_polar.set_yticks([.2, .4, .6, .8])     # no 0 label: it would sit under the vectors' common origin
+    ax_polar.set_rlabel_position(67.5)         # between the angular labels, away from the vectors
     if polar_ylim is not None:
         ax_polar.set_ylim(polar_ylim)
     if polar_title is not None:
         ax_polar.set_title(polar_title)
-    if legend:
-        ax_polar.legend()
+    if legend:      # outside the axes so it never covers a vector
+        ax_polar.legend(loc='upper left', bbox_to_anchor=(1.1, 1.0), frameon=False)
     fig_polar.tight_layout()
 
     return (fig_hist, ax_hist), (fig_polar, ax_polar)

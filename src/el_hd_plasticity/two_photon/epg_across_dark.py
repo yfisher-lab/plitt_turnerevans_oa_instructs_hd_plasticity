@@ -99,5 +99,5 @@ def plot_sess_heatmaps_w_hist(ts_dict, bins=DEFAULT_OFFSET_BINS, vmin=-.5, vmax=
         Tuple of (figure, (heatmap_axs, hist_axs, cbar_ax)).
     """
     return plotting.plot_heatmaps_with_offset_hist(
-        _heatmap_traces(ts_dict), ts_dict['fly'], figsize=[8, 2], vmin=vmin, vmax=vmax,
+        _heatmap_traces(ts_dict), ts_dict['fly'], figsize=[10, 6], vmin=vmin, vmax=vmax,
         plot_times=plot_times, twindow=twindow, bins=bins, share_axes=True, hist_xlim_zero=True)
