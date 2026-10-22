@@ -41,7 +41,7 @@ SESSION_GROUPS = GROUPS[:2]                     # groups with session figures (t
 def load_session_manager(basedir=BASEDIR, figdir=DEFAULT_FIGDIR):
     """Usable sessions of the groups of interest, with the condition in the fly id."""
     sess_manager = nmp.loading.SessionManager(basedir=basedir, figfolder=figdir, folder_cols=('condition',),
-                                              id_cols=['condition'], usable_only=False)   # 'usable' is mostly blank
+                                              id_cols=['condition'], usable_only=True)   # 'usable' is mostly blank
     df = sess_manager.sess_df
     sess_manager.filter_rows(df['condition'].isin([group.value for group in GROUPS]))
     return sess_manager
