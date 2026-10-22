@@ -31,7 +31,7 @@ DEFAULT_FIGDIR = pathlib.Path('/media/mplitt/SSD_storage/fig_scratch/R60D05LexA_
 GROUPS = [Group('uas_control', 'UAS control', 'black'),
           Group('hckcr1', 'HcKCR1', 'green')]
 REFERENCE = 'uas_control'  # group the other groups are compared with
-ZERO_GROUPS = ()  # groups whose first post-cue offset is unwrapped toward baseline
+ZERO_GROUPS = ('uas_control', 'hckcr1')  # groups whose first post-cue offset is unwrapped toward baseline
 OPTO_ZSCORE = True
 SESSION_VMAX = 1.5                              # color limit of the session heatmaps
 
