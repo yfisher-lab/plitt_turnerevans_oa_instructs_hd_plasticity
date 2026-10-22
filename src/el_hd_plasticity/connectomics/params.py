@@ -1,4 +1,12 @@
-"""Defaults for connecting to neuPrint (server dataset and authentication token)."""
+"""Defaults for connecting to neuPrint (server dataset and authentication token).
 
-NPT_TOKEN = 'ee7b815aec0824ee13af46319ef63fedef5785b0184634a55d95e1fd3a0d85e3'
+The token is read from the ``NEUPRINT_APPLICATION_CREDENTIALS`` environment variable (the one the neuPrint
+tools use) when it is set.
+"""
+
+import os
+
+NPT_TOKEN = os.environ.get('NEUPRINT_APPLICATION_CREDENTIALS')
 NPT_DATASET = 'hemibrain:v1.2.1'
+
+CODEX_TOKEN = os.environ.get('CODEX_API_TOKEN')

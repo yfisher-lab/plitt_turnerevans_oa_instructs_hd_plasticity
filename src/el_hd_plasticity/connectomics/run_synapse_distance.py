@@ -17,14 +17,9 @@ import pandas as pd
 
 from . import synapse_distance
 from .connectomics import npt_client
+from .synapse_distance import ER_TYPES
 
 DEFAULT_OUTDIR = '/media/mplitt/SSD_storage/fig_scratch/EL_connectomics/syn_distances'
-
-ER_TYPES = ('ER4d', 'ER4m',
-            'ER2_a', 'ER2_b', 'ER2_c', 'ER2_d',
-            'ER3w_b', 'ER3a_c', 'ER3p_a', 'ER3w_a', 'ER3a_b', 'ER3p_b', 'ER3d_c', 'ER3d_a',
-            'ER3d_d', 'ER3d_b', 'ER3a_a', 'ER3a_d', 'ER3m',
-            'ER1_b', 'ER1_a')
 
 PRE_TYPE = 'epg_pre'
 POST_TYPES = ['el_post', 'exr2_post', 'exr3_post']

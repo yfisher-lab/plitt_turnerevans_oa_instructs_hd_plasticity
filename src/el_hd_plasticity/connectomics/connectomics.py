@@ -14,6 +14,13 @@ from sklearn.decomposition import PCA
 from . import params
 
 
+def _flip_yz(xyz):
+    """Flip the y and z axes of (N, 3) EB-basis coordinates (copy), the convention of all EB-frame figures."""
+    xyz = np.array(xyz, dtype=float)
+    xyz[:, 1:] *= -1
+    return xyz
+
+
 def npt_client(webpage='neuprint.janelia.org', dataset=params.NPT_DATASET, token=params.NPT_TOKEN):
     """Create a neuPrint client (also registers it as the default client for neuprint/navis calls).
 
@@ -77,6 +84,27 @@ class EBCoordinateSystem:
         """
         return (x-self.orig_origin) @ self.eb_basis.T
     
+    def to_eb_frame(self, x):
+        """Convert Neuprint coordinates to the EB frame used in the figures: EB basis with y and z flipped.
+
+        Args:
+            x: (N, 3) array of coordinates in Neuprint coordinate system (x, y, z).
+
+        Returns:
+            (N, 3) array in the EB frame.
+        """
+        return _flip_yz(self.change_of_basis(x))
+
+    def fetch_roi(self, roi):
+        """Mesh of a hemibrain ROI (e.g. 'EB', 'PB') with its vertices in the EB frame."""
+        mesh = neu.fetch_roi(roi)
+        mesh.vertices = self.to_eb_frame(mesh.vertices)
+        return mesh
+
+    def fetch_skeleton(self, body_id):
+        """navis skeleton of a neuron (see :func:`navis.interfaces.neuprint.fetch_skeletons`) in the EB frame."""
+        return self.skeleton_to_eb_coords(neu.fetch_skeletons(body_id))
+
     @staticmethod
     def cart3d_to_polar2d(x):
         """Convert 3D Cartesian coordinates to 2D polar coordinates.
@@ -263,9 +291,7 @@ class EBCoordinateSystem:
             The same NeuronList, with its node table replaced by one in EB coordinates (float32).
         """
         nodes = navis_skeleton.nodes.copy()
-        nodes.loc[:, ['x', 'y', 'z']] = self.change_of_basis(nodes.loc[:, ['x', 'y', 'z']].values).astype(np.float32)
-        nodes.loc[:, 'y'] = -nodes.loc[:, 'y']  # flip y axis to match EB coordinates
-        nodes.loc[:, 'z'] = -nodes.loc[:, 'z']
+        nodes.loc[:, ['x', 'y', 'z']] = self.to_eb_frame(nodes.loc[:, ['x', 'y', 'z']].values).astype(np.float32)
         navis_skeleton.set_neuron_attributes(nodes, name='nodes')
         return navis_skeleton
 
@@ -279,16 +305,17 @@ def add_eb_coords(syn_df, ebcoords, type='post'):
 
     Args:
         syn_df: DataFrame from ``neuprint.fetch_synapse_connections`` with columns
-            x_pre/y_pre/z_pre and x_post/y_post/z_post.
+            x_pre/y_pre/z_pre and x_post/y_post/z_post, or from ``neuprint.fetch_synapses`` with columns x/y/z
+            (``type=None``).
         ebcoords: :class:`EBCoordinateSystem`.
-        type: Which side of the synapse to locate, 'pre' or 'post'.
+        type: Which side of the synapse to locate, 'pre' or 'post'; None to use the plain x, y, z columns.
 
     Returns:
         `syn_df` (modified in place).
     """
-    syn_df.loc[:, ['x_eb', 'y_eb', 'z_eb']] = ebcoords.change_of_basis(
-        syn_df.loc[:, [f'x_{type}', f'y_{type}', f'z_{type}']].values)
-    syn_df.loc[:, ['y_eb', 'z_eb']] = -1 * syn_df.loc[:, ['y_eb', 'z_eb']]
+    suffix = '' if type is None else f'_{type}'
+    syn_df.loc[:, ['x_eb', 'y_eb', 'z_eb']] = _flip_yz(ebcoords.change_of_basis(
+        syn_df.loc[:, [f'x{suffix}', f'y{suffix}', f'z{suffix}']].values))
     phase, radius = ebcoords.get_circ_coordinates(syn_df.loc[:, ['x_eb', 'y_eb', 'z_eb']].values)
     syn_df['phase'], syn_df['radius'] = phase, radius
     syn_df['radius_scaled'] = ebcoords.scale_radius(syn_df['phase'], syn_df['radius'])
@@ -322,3 +349,45 @@ def peeled_convex_hull(syn_points, n=20):
         syn_hull = sp.spatial.ConvexHull(syn_points)
         syn_points = np.delete(syn_points, syn_hull.vertices, axis=0)
     return syn_points[sp.spatial.ConvexHull(syn_points).vertices, :]
+
+
+def fetch_eb_synapses(ebcoords, body_ids, side='pre', roi='EB'):
+    """Synapses of neurons in `roi` with their EB-frame coordinates (see :func:`add_eb_coords`).
+
+    Args:
+        ebcoords: :class:`EBCoordinateSystem`.
+        body_ids: Body ID(s) of the neurons.
+        side: 'pre' or 'post' synapses.
+        roi: ROI the synapses are in.
+    """
+    syn = neu.fetch_synapses(body_ids, neu.SynapseCriteria(rois=[roi], type=side))
+    return add_eb_coords(syn, ebcoords, type=None)
+
+
+def synapse_phase(syn_xy, n=10):
+    """Ring phase of a neuron from the outline of its synapses.
+
+    The outline is the peeled convex hull of the synapse positions in the EB-frame xy plane (see
+    :func:`peeled_convex_hull`); the phase is the circular mean of the angles of its vertices.
+
+    Args:
+        syn_xy: (N, 2) array of synapse x, y coordinates in the EB frame.
+        n: Number of times the convex hull is peeled.
+
+    Returns:
+        Tuple of (hull vertices, phase in radians).
+    """
+    hull = peeled_convex_hull(syn_xy, n=n)
+    phase = np.angle(np.exp(1j * np.arctan2(hull[:, 1], hull[:, 0])).mean())
+    return hull, phase
+
+
+def phase_width(phase, low=5, high=95):
+    """Width (radians) of a distribution of ring phases: the span between two percentiles around its circular mean.
+
+    Args:
+        phase: Array of phases in radians (e.g. the ``phase`` column of :func:`add_eb_coords`).
+        low, high: Percentiles bounding the width.
+    """
+    centered = np.angle(np.exp(1j * (phase - np.angle(np.exp(1j * phase).mean()))))
+    return np.angle(np.exp(1j * (np.percentile(centered, high) - np.percentile(centered, low))))

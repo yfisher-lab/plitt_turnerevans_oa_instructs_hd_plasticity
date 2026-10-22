@@ -1,10 +1,15 @@
 """Figures for hemibrain connectivity."""
 
-import navis.interfaces.neuprint as neu
+import navis
+import networkx as nx
 import numpy as np
+import scipy as sp
 import seaborn as sns
 from matplotlib import pyplot as plt
 from matplotlib.gridspec import GridSpec
+from matplotlib.ticker import AutoMinorLocator
+
+from .connectivity import er_input_matrix
 
 ER_INPUT_TYPES = ["EPG", "PEG", "PEN_a(PEN1)", "PEN_b(PEN2)", "EL"]
 
@@ -31,9 +36,7 @@ def plot_er_inputs_with_marginal(conn_df, weight_col='relative_weight', input_ty
     marginal_ax = fig.add_subplot(gs[0, 4], sharey=heatmap_ax)
     cbar_ax = fig.add_subplot(gs[0, 5])
 
-    conn_matrix_df = neu.connection_table_to_matrix(conn_df, weight_col=weight_col, sort_by='type', group_cols='type')
-    conn_matrix_df.loc['PEG'] = 0
-    conn_matrix_df = conn_matrix_df.loc[input_types]
+    conn_matrix_df = er_input_matrix(conn_df, weight_col, input_types)
 
     sns.heatmap(conn_matrix_df, ax=heatmap_ax, cmap='Blues', annot=False, cbar_kws={'label': 'Weight'},
                 cbar_ax=cbar_ax)
@@ -46,3 +49,220 @@ def plot_er_inputs_with_marginal(conn_df, weight_col='relative_weight', input_ty
     marginal_ax.spines['right'].set_visible(False)
     marginal_ax.spines['top'].set_visible(False)
     return fig, (heatmap_ax, marginal_ax, cbar_ax)
+
+
+# ----------------------------------------------------------------------------
+# Neurons and synapses in the EB frame
+# ----------------------------------------------------------------------------
+def clean_axes(ax):
+    """Remove ticks, labels, spines and grid of `ax`, as in the anatomy panels."""
+    ax.grid(False)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xlabel('')
+    ax.set_ylabel('')
+    for side in ('top', 'right', 'left', 'bottom'):
+        ax.spines[side].set_visible(False)
+
+
+def plot_neurons_2d(items, colors=None, view=('x', 'y'), ax=None, figsize=(5, 5), linewidth=1.2, alpha=1.,
+                    radius=True, **kwargs):
+    """Project neurons and ROI meshes onto a plane with :func:`navis.plot2d` and clean up the axes.
+
+    Args:
+        items: navis neurons / volumes (e.g. a skeleton from :meth:`EBCoordinateSystem.fetch_skeleton`, an ROI mesh from
+            :meth:`EBCoordinateSystem.fetch_roi`).
+        colors: One color per item, or a single color.
+        view: The two axes of the projection, e.g. ``('x', 'z')``.
+        ax: Axes to draw on; a new figure of size `figsize` if None.
+        linewidth, alpha, radius: Passed to :func:`navis.plot2d` (`radius` draws neurites with their radius).
+        **kwargs: Further arguments of :func:`navis.plot2d` (e.g. ``shade_by``, ``smin``, ``smax``).
+
+    Returns:
+        Tuple of (figure, axes).
+    """
+    if ax is None:
+        _, ax = plt.subplots(figsize=figsize)
+    if colors is not None:
+        kwargs['color'] = tuple(colors) if isinstance(colors, (list, tuple)) and not np.isscalar(colors[0]) else colors
+    navis.plot2d(items, method='2d', connectors=False, linewidth=linewidth, view=view, alpha=alpha, radius=radius, ax=ax,
+                 **kwargs)
+    clean_axes(ax)
+    return ax.figure, ax
+
+
+def phase_colormap(n=18):
+    """Function mapping a ring phase in (-pi, pi] to a color of a circular palette."""
+    cmap = sns.color_palette('hls', n, as_cmap=True)
+    return lambda phase: cmap((phase + np.pi) / 2 / np.pi)
+
+
+def xsec_outline(ebcoords):
+    """Vertices of the convex hull of the EB cross-section (xsec_x, xsec_y coordinates of its mesh vertices)."""
+    r, p = ebcoords.eb_vertices_xsec['radius'], ebcoords.eb_vertices_xsec['phase']
+    points = np.column_stack((r * np.cos(p), r * np.sin(p)))
+    return points[sp.spatial.ConvexHull(points).vertices]
+
+
+def plot_xsec_density(datasets, ebcoords, figsize=(5, 5), fill=False, share_axes=True):
+    """Kernel density of synapse positions in the EB cross-section, drawn inside the cross-section outline.
+
+    Args:
+        datasets: List of (synapse table with xsec_x / xsec_y, colormap, alpha) tuples.
+        ebcoords: :class:`~el_hd_plasticity.connectomics.connectomics.EBCoordinateSystem`.
+        figsize: Size of the figure (with ``share_axes=False`` one panel per dataset).
+        fill: Fill the density contours.
+        share_axes: Draw all datasets in one panel; otherwise one panel each.
+
+    Returns:
+        Tuple of (figure, array of axes).
+    """
+    n_panels = 1 if share_axes else len(datasets)
+    fig, axs = plt.subplots(1, n_panels, figsize=figsize, squeeze=False)
+    outline = xsec_outline(ebcoords)
+    for i, (table, cmap, alpha) in enumerate(datasets):
+        sns.kdeplot(data=table, x='xsec_x', y='xsec_y', fill=fill, ax=axs[0, 0 if share_axes else i], cmap=cmap, alpha=alpha)
+    for ax in axs.flat:
+        ax.plot(*np.vstack([outline, outline[:1]]).T, color='black')
+        clean_axes(ax)
+    return fig, axs
+
+
+# ----------------------------------------------------------------------------
+# Connectivity graph and synapse distances
+# ----------------------------------------------------------------------------
+def plot_connectivity_graph(graph, colors, pos, edge_attr='weight', arrow_scale=.00015, figsize=(5, 5)):
+    """Draw a type-level connectivity graph: node size by label, arrow width by `edge_attr`, edge labels with the weight.
+
+    Args:
+        graph: Directed graph from :func:`~el_hd_plasticity.connectomics.connectivity.connectivity_graph`.
+        colors: Dict node -> color (edges take the color of their source).
+        pos: Dict node -> (x, y) position.
+        edge_attr: Edge attribute setting the arrow size and label.
+        arrow_scale: Arrow head size per unit of `edge_attr`.
+        figsize: Size of the figure.
+
+    Returns:
+        Tuple of (figure, axes).
+    """
+    fig, ax = plt.subplots(figsize=figsize)
+    nx.draw_networkx_nodes(graph, pos, node_size=800, node_color=[colors[n] for n in graph.nodes()], alpha=1., ax=ax)
+    nx.draw_networkx_labels(graph, pos, font_size=8, font_color='black', ax=ax,
+                            labels={n: f"{n} \n N={d['n_neurons']}" for n, d in graph.nodes(data=True)})
+    arrows = [f"simple, head_width={d[edge_attr] * arrow_scale:.2f}, head_length={d[edge_attr] * arrow_scale:.2f}, "
+              f"tail_width={d[edge_attr] * arrow_scale / 2:.2f}" for _, _, d in graph.edges(data=True)]
+    nx.draw_networkx_edges(graph, pos, connectionstyle='arc3,rad=0.12', edge_color=[colors[u] for u, _, _ in graph.edges(data=True)],
+                           node_size=[d['n_neurons'] * 30 + 200 for _, d in graph.nodes(data=True)], ax=ax,
+                           arrowstyle=arrows, alpha=1.)
+    nx.draw_networkx_edge_labels(graph, pos, edge_labels={(u, v): f"{d[edge_attr]:.0f}" for u, v, d in graph.edges(data=True)},
+                                 font_size=8, connectionstyle='arc3,rad=0.12', ax=ax)
+    for side in ('top', 'right', 'left', 'bottom'):
+        ax.spines[side].set_visible(False)
+    return fig, ax
+
+
+def _distance_axis(ax, xlim=None):
+    ax.set_xlabel('approx. cable distance (microns)')
+    ax.set_xticks([0, 4, 8, 12])
+    ax.xaxis.set_minor_locator(AutoMinorLocator())
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    if xlim is not None:
+        ax.set_xlim(xlim)
+
+
+def plot_distance_histogram(df, hue_order, palette, bins=None, ax=None, figsize=(2, 4)):
+    """Distribution of cable distances (``distances`` column of a distance table) by ``source``, as filled polygons.
+
+    Args:
+        df: Table with ``source`` and ``distances`` (microns), see
+            :func:`~el_hd_plasticity.connectomics.synapse_distance.load_distance_table`.
+        hue_order: Sources to draw, in order.
+        palette: One color per source.
+        bins: Histogram bins (microns); seaborn's default if None.
+    """
+    if ax is None:
+        _, ax = plt.subplots(figsize=figsize)
+    sns.histplot(data=df.loc[df['source'].isin(hue_order)], x='distances', hue='source', hue_order=hue_order,
+                 palette=palette, fill=True, common_norm=False, cumulative=False, element='poly', stat='probability',
+                 bins=bins if bins is not None else 'auto', ax=ax)
+    _distance_axis(ax)
+    return ax.figure, ax
+
+
+def plot_family_distance_histogram(df, group, source='el', bins=None, color=None, ax=None, figsize=(2, 4)):
+    """Distribution of cable distances to `source` of one family of ER neuron types (``er`` in `group`)."""
+    if ax is None:
+        _, ax = plt.subplots(figsize=figsize)
+    bins = np.linspace(0, 16, 80) if bins is None else bins
+    sns.histplot(data=df.loc[(df['source'] == source) & df['er'].isin(group)], x='distances', bins=bins, ax=ax, fill=True,
+                 stat='probability', element='poly', common_norm=False, cumulative=False,
+                 color=plt.cm.Greens(.8) if color is None else color)
+    _distance_axis(ax, xlim=[0, 16])
+    ax.set_title(str(group))
+    ax.set_ylim([0, .15])
+    return ax.figure, ax
+
+
+def plot_cumulative_distances(df, groups, sources=('el', 'exr2'), bins=None, figsize=(4, 4)):
+    """Cumulative distance distributions of every ER family: one panel per source (solid for the first, dashed otherwise)."""
+    bins = np.linspace(0, 16, 80) if bins is None else bins
+    fig, axs = plt.subplots(1, len(sources), figsize=figsize)
+    for ax, source, linestyle in zip(np.atleast_1d(axs), sources, ('-', '--', ':'), strict=False):
+        for group in groups:
+            sns.histplot(data=df.loc[(df['source'] == source) & df['er'].isin(group)], x='distances', bins=bins, ax=ax,
+                         fill=False, stat='probability', element='poly', common_norm=False, cumulative=True,
+                         linestyle=linestyle, linewidth=1 if linestyle != '-' else None)
+        _distance_axis(ax, xlim=[0, 16])
+    fig.legend([str(g) for g in groups], bbox_to_anchor=(1.05, 1), loc='lower left', borderaxespad=0.)
+    return fig, axs
+
+
+def plot_partner_counts(table, column, ylabel, groups, ymax=20, figsize=(3, 3)):
+    """Number of partners of every neuron (points), colored by ER family; ``table`` from
+    :func:`~el_hd_plasticity.connectomics.synapse_distance.partner_count_table`."""
+    fig, ax = plt.subplots(figsize=figsize)
+    data = table.assign(plot_x=0)
+    sns.stripplot(data=data, x='plot_x', y=column, hue='group', hue_order=[str(g) for g in groups], dodge=True, ax=ax, s=8)
+    sns.move_legend(ax, 'upper right', bbox_to_anchor=(3, 1))
+    ax.set_ylabel(ylabel)
+    ax.set_xticks([])
+    ax.set_xlabel('')
+    ax.set_yticks(np.arange(0, ymax, 2))
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    return fig, ax
+
+
+def plot_connectivity_comparison(table, edge_attr='relative_weight', palette=None, figsize=(6, 3)):
+    """Connection strength between types in several datasets: one group of bars per connection, one bar per dataset.
+
+    Args:
+        table: Stacked type connectivity tables (type_pre, type_post, `edge_attr`, ``dataset``), see
+            :func:`~el_hd_plasticity.connectomics.connectivity.compare_datasets`.
+        edge_attr: Column plotted on the y axis (weight, relative_weight, pcnt_output or nrn_weight).
+        palette: Dict dataset -> color (default: seaborn's).
+    """
+    data = table.assign(connection=table['type_pre'] + ' \u2192 ' + table['type_post'])
+    fig, ax = plt.subplots(figsize=figsize)
+    sns.barplot(data=data, x='connection', y=edge_attr, hue='dataset', palette=palette, ax=ax)
+    ax.set_xlabel('')
+    ax.set_ylabel(edge_attr.replace('_', ' '))
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), frameon=False)
+    return fig, ax
+
+
+def plot_input_comparison(marginals, palette=None, ylabel='Mean weight onto ER types', figsize=(5, 3)):
+    """Mean input of each presynaptic type onto ER neurons in several datasets (output of
+    :func:`~el_hd_plasticity.connectomics.connectivity.er_input_marginals`)."""
+    data = marginals.rename_axis('input type').reset_index().melt(id_vars='input type', var_name='dataset', value_name='weight')
+    fig, ax = plt.subplots(figsize=figsize)
+    sns.barplot(data=data, x='input type', y='weight', hue='dataset', palette=palette, ax=ax)
+    ax.set_xlabel('')
+    ax.set_ylabel(ylabel)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1), frameon=False)
+    return fig, ax
