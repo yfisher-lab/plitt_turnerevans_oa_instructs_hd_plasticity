@@ -10,10 +10,12 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 
+from .datasets import match_types
+
 EB = ['EB']
 MIN_ROI_WEIGHT = 3
 # Types merged into one node of the type-level graph.
-MERGED_ER = ('ER4d', 'ER2_a', 'ER2_b', 'ER2_c', 'ER2_d')
+MERGED_ER = ('ER4d', 'ER2.*')                 # regular expressions: the hemibrain splits ER2 into ER2_a-d, FAFB has a single ER2
 MERGED_ER_NAME = 'ER2/4d'
 
 
@@ -100,7 +102,7 @@ def type_connectivity(conn_df, neuron_df, type_counts, merge=MERGED_ER, merged_n
         conn_df: Connections with type_pre, type_post, weight.
         neuron_df: The neurons involved (with ``type``).
         type_counts: Pre- and postsynapses per type (see :func:`fetch_type_synapse_counts`).
-        merge: Types to combine.
+        merge: Types (regular expressions) to combine.
         merged_name: Name of the combined node.
         partners: Types that connect with the merged node.
 
@@ -109,9 +111,10 @@ def type_connectivity(conn_df, neuron_df, type_counts, merge=MERGED_ER, merged_n
         number of neurons of each type as a dict including the merged node).
     """
     n_neurons = neuron_df['type'].value_counts()
+    merge = list(n_neurons.index[match_types(pd.Series(n_neurons.index), merge)])      # the types present that are merged
     counts = type_counts.copy()
-    counts.loc[merged_name] = counts.reindex(list(merge)).sum()
-    n_neurons_all = {**n_neurons.to_dict(), merged_name: int(n_neurons.reindex(list(merge)).sum())}
+    counts.loc[merged_name] = counts.reindex(merge).sum()
+    n_neurons_all = {**n_neurons.to_dict(), merged_name: int(n_neurons.reindex(merge).sum())}
 
     def normalized(df):
         df = df.copy()

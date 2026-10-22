@@ -234,7 +234,7 @@ def plot_partner_counts(table, column, ylabel, groups, ymax=20, figsize=(3, 3)):
     return fig, ax
 
 
-def plot_connectivity_comparison(table, edge_attr='relative_weight', palette=None, figsize=(6, 3)):
+def plot_connectivity_comparison(table, edge_attr='relative_weight', palette=None, figsize=None):
     """Connection strength between types in several datasets: one group of bars per connection, one bar per dataset.
 
     Args:
@@ -242,10 +242,14 @@ def plot_connectivity_comparison(table, edge_attr='relative_weight', palette=Non
             :func:`~el_hd_plasticity.connectomics.connectivity.compare_datasets`.
         edge_attr: Column plotted on the y axis (weight, relative_weight, pcnt_output or nrn_weight).
         palette: Dict dataset -> color (default: seaborn's).
+        figsize: Size of the figure (default: wide enough for the connection labels, which are rotated).
     """
     data = table.assign(connection=table['type_pre'] + ' \u2192 ' + table['type_post'])
-    fig, ax = plt.subplots(figsize=figsize)
+    n_connections = data['connection'].nunique()
+    fig, ax = plt.subplots(figsize=figsize or (max(4., .9 * n_connections + 1.5), 3.5))
     sns.barplot(data=data, x='connection', y=edge_attr, hue='dataset', palette=palette, ax=ax)
+    ax.tick_params(axis='x', labelrotation=45)
+    plt.setp(ax.get_xticklabels(), ha='right', rotation_mode='anchor')
     ax.set_xlabel('')
     ax.set_ylabel(edge_attr.replace('_', ' '))
     ax.spines['top'].set_visible(False)
