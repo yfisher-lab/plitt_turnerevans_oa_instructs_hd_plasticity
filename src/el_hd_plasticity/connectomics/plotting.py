@@ -91,6 +91,36 @@ def plot_neurons_2d(items, colors=None, view=('x', 'y'), ax=None, figsize=(5, 5)
     return ax.figure, ax
 
 
+def plot_instance_example(skeleton, syns, instances, colors=('black', 'orangered', 'dodgerblue'), view=('x', 'y'), margin=400,
+                          bar_um=5, skeleton_color=None, ax=None, figsize=(5, 3)):
+    """An axon segment with the synapses of a few EPG instances, zoomed on those synapses.
+
+    Args:
+        skeleton: The ER neuron's skeleton in the EB frame (:meth:`EBCoordinateSystem.fetch_skeleton`).
+        syns: Synapses of the neuron with ``type`` (instance) and ``x_eb``, ``y_eb``, ``z_eb`` columns.
+        instances: Instance labels to draw, one color each.
+        view: The two axes of the projection.
+        margin: Voxels around the synapses shown.
+        bar_um: Length of the scale bar in microns.
+
+    Returns:
+        Tuple of (figure, axes).
+    """
+    skeleton_color = plt.cm.cool(.7) if skeleton_color is None else skeleton_color
+    fig, ax = plot_neurons_2d([skeleton], colors=skeleton_color, view=view, linewidth=1., ax=ax, figsize=figsize)
+    selected = syns[syns['type'].isin(instances)]
+    xs, ys = (f'{axis}_eb' for axis in view)
+    for instance, color in zip(instances, colors, strict=True):
+        syn = selected[selected['type'] == instance]
+        ax.scatter(syn[xs], syn[ys], s=40, color=color, zorder=100, label=f'{instance} (n={len(syn)})')
+    ax.set_xlim(selected[xs].min() - margin, selected[xs].max() + margin)
+    ax.set_ylim(selected[ys].min() - margin, selected[ys].max() + margin)
+    x0, y0 = ax.get_xlim()[0] + 100, ax.get_ylim()[0] + 100
+    ax.plot([x0, x0], [y0, y0 + bar_um * 1000 / 8], linewidth=5, color='black')
+    ax.legend(loc='upper left', bbox_to_anchor=(1.0, 1.0), frameon=False)
+    return fig, ax
+
+
 def phase_colormap(n=18):
     """Function mapping a ring phase in (-pi, pi] to a color of a circular palette."""
     cmap = sns.color_palette('hls', n, as_cmap=True)
@@ -102,6 +132,20 @@ def xsec_outline(ebcoords):
     r, p = ebcoords.eb_vertices_xsec['radius'], ebcoords.eb_vertices_xsec['phase']
     points = np.column_stack((r * np.cos(p), r * np.sin(p)))
     return points[sp.spatial.ConvexHull(points).vertices]
+
+
+def _plot_density(datasets, x, y, outlines, figsize, fill, share_axes, equal_aspect=False):
+    n_panels = 1 if share_axes else len(datasets)
+    fig, axs = plt.subplots(1, n_panels, figsize=figsize, squeeze=False)
+    for i, (table, cmap, alpha) in enumerate(datasets):
+        sns.kdeplot(data=table, x=x, y=y, fill=fill, ax=axs[0, 0 if share_axes else i], cmap=cmap, alpha=alpha)
+    for ax in axs.flat:
+        for outline in outlines:
+            ax.plot(*np.vstack([outline, outline[:1]]).T, color='black')
+        clean_axes(ax)
+        if equal_aspect:
+            ax.set_aspect('equal')
+    return fig, axs
 
 
 def plot_xsec_density(datasets, ebcoords, figsize=(5, 5), fill=False, share_axes=True):
@@ -117,15 +161,24 @@ def plot_xsec_density(datasets, ebcoords, figsize=(5, 5), fill=False, share_axes
     Returns:
         Tuple of (figure, array of axes).
     """
-    n_panels = 1 if share_axes else len(datasets)
-    fig, axs = plt.subplots(1, n_panels, figsize=figsize, squeeze=False)
-    outline = xsec_outline(ebcoords)
-    for i, (table, cmap, alpha) in enumerate(datasets):
-        sns.kdeplot(data=table, x='xsec_x', y='xsec_y', fill=fill, ax=axs[0, 0 if share_axes else i], cmap=cmap, alpha=alpha)
-    for ax in axs.flat:
-        ax.plot(*np.vstack([outline, outline[:1]]).T, color='black')
-        clean_axes(ax)
-    return fig, axs
+    return _plot_density(datasets, 'xsec_x', 'xsec_y', [xsec_outline(ebcoords)], figsize, fill, share_axes)
+
+
+def plot_eb_density(datasets, ebcoords, figsize=(5, 5), fill=False, share_axes=True):
+    """Kernel density of synapse positions in the x, y plane of the EB frame, drawn inside the outline of the ring.
+
+    Args:
+        datasets: List of (synapse table with x_eb / y_eb, colormap, alpha) tuples, see
+            :func:`~el_hd_plasticity.connectomics.connectomics.add_eb_coords`.
+        ebcoords: :class:`~el_hd_plasticity.connectomics.connectomics.EBCoordinateSystem`.
+        figsize: Size of the figure (with ``share_axes=False`` one panel per dataset).
+        fill: Fill the density contours.
+        share_axes: Draw all datasets in one panel; otherwise one panel each.
+
+    Returns:
+        Tuple of (figure, array of axes).
+    """
+    return _plot_density(datasets, 'x_eb', 'y_eb', ebcoords.ring_outline(), figsize, fill, share_axes, equal_aspect=True)
 
 
 # ----------------------------------------------------------------------------

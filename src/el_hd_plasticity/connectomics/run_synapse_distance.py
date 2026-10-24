@@ -70,7 +70,7 @@ if __name__ == "__main__":
     outdir = pathlib.Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    npt_client()
+    client = npt_client()      # keep a reference: neuPrint only holds the default client weakly
     for er_type in ER_TYPES:
         print(er_type)
         run_er_type(er_type, outdir, processes=args.processes)

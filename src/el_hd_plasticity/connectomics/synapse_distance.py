@@ -100,6 +100,62 @@ def calc_syn_distance(args, pre_type, post_types):
     return {'cable_distance': distances, 'euclidean_distance': euc_distances}
 
 
+def calc_instance_distance(args):
+    """Distance from each synapse to the nearest synapse of a different group, along the neuron's cable.
+
+    Each synapse carries a group label (e.g. the cell type instance of its postsynaptic partner). For every synapse the
+    shortest path along the neuron's (upsampled) skeleton to any synapse with a *different* label is measured, limited
+    to :data:`MAX_CABLE_NM` unless a different limit is given.
+
+    Args:
+        args: Tuple (bodyId, synapses[, max_cable_nm]) with the neuron's body ID, a DataFrame of its synapses with
+            columns x, y, z and ``type`` (the group label), one row per synapse, and optionally the longest path (nm)
+            to search (default :data:`MAX_CABLE_NM`; None for no limit).
+
+    Returns:
+        Dict with ``instance`` (the group label of each synapse, in the order of `synapses`) and ``cable_distance`` (the
+        distance in voxels to the nearest synapse of another group; NaN if there is none within the cutoff).
+    """
+    body_id, syns = args[0], args[1].reset_index(drop=True)
+    max_cable_nm = args[2] if len(args) > 2 else MAX_CABLE_NM
+    skel = neu_orig.fetch_skeleton(body_id, heal=True, with_distances=True)
+    skel = neu_orig.upsample_skeleton(skel, 1)
+    skel = neu_orig.attach_synapses_to_skeleton(skel, syns)
+    skel_nx = neu_orig.skeleton_df_to_nx(skel, with_distances=True, directed=False)
+
+    # the synapses were appended to the skeleton as nodes, in order
+    syn_nodes = skel.loc[skel['structure'] != 'neurite', ['rowId', 'structure']]
+    labels = syn_nodes['structure'].astype(str).to_numpy()
+    distance = np.full(len(syn_nodes), np.nan)
+    cutoff = None if max_cable_nm is None else max_cable_nm / VOXEL_NM
+    for label in np.unique(labels):
+        others = syn_nodes.loc[labels != label, 'rowId'].tolist()
+        if not others:
+            continue
+        reach = nx.multi_source_dijkstra_path_length(skel_nx, others, cutoff=cutoff, weight='distance')
+        mine = labels == label
+        distance[mine] = [reach.get(node, np.nan) for node in syn_nodes.loc[mine, 'rowId']]
+    return {'instance': labels, 'cable_distance': distance}
+
+
+def adjacent_instances(syns, n_neighbors=2):
+    """The most-synapsed instance of a neuron and the instances whose synapses lie closest to it.
+
+    Args:
+        syns: One neuron's synapses with ``type`` (instance) and ``x_eb``, ``y_eb``, ``z_eb`` columns.
+        n_neighbors: Number of neighboring instances to return.
+
+    Returns:
+        List of instance labels: the instance with most synapses, then the `n_neighbors` instances whose synapse centroids
+        are nearest to its centroid.
+    """
+    main = syns['type'].value_counts().index[0]
+    centroids = syns.groupby('type')[['x_eb', 'y_eb', 'z_eb']].mean()
+    separation = np.linalg.norm(centroids - centroids.loc[main], axis=1)
+    neighbors = centroids.index[np.argsort(separation)]
+    return [main] + [instance for instance in neighbors if instance != main][:n_neighbors]
+
+
 def neuron_synapse_args(syns, bodyIds, pre_type):
     """Split a pooled synapse table into one (bodyId, synapses) argument per neuron.
 
@@ -157,6 +213,25 @@ def run_distances(syns, bodyIds, pre_type, post_types, outfile, processes=8):
     return results
 
 
+def run_instance_distances(syns, bodyIds, outfile, processes=8, max_cable_nm=MAX_CABLE_NM):
+    """Compute :func:`calc_instance_distance` for many neurons in parallel and pickle the results.
+
+    Args:
+        syns: Synapse table with ``bodyId_pre`` (the neuron the synapse is located on), x, y, z and ``type`` (group label).
+        bodyIds: Body IDs of the neurons to analyse.
+        outfile: Path of the pickle to write (list of results in the order of `bodyIds`).
+        processes: Number of worker processes.
+        max_cable_nm: Longest path to search (nm); None for no limit.
+    """
+    args = [(body_id, syns.loc[syns['bodyId_pre'] == body_id, ['x', 'y', 'z', 'type']], max_cable_nm)
+            for body_id in bodyIds]
+    with Pool(processes=processes) as pool:
+        results = pool.map(calc_instance_distance, args)
+    with open(outfile, 'wb') as f:
+        pickle.dump(results, f)
+    return results
+
+
 # ----------------------------------------------------------------------------
 # Loading results
 # ----------------------------------------------------------------------------
@@ -192,6 +267,21 @@ def load_distance_table(folder, types, structures, names=None, filename='{type}_
         for structure, name in zip(structures, names, strict=True):
             distances = distances_um(results, structure)
             frames.append(pd.DataFrame({'er': neuron_type, 'source': name, 'distances': distances}))
+    return pd.concat(frames, ignore_index=True)
+
+
+def load_instance_distance_table(folder, types, name='epg_instance', filename='{type}_epg_instance_distances.pkl'):
+    """Distances to the nearest synapse of another group (see :func:`calc_instance_distance`) as a long table.
+
+    Returns:
+        DataFrame with ``er`` (the neuron type), ``source`` (`name`) and ``distances`` (microns; NaN where no synapse of
+        another group was within range), in the format of :func:`load_distance_table`.
+    """
+    frames = []
+    for neuron_type in types:
+        results = load_results(pathlib.Path(folder) / filename.format(type=neuron_type))
+        distances = np.concatenate([r['cable_distance'] for r in results]) * VOXEL_NM / 1000
+        frames.append(pd.DataFrame({'er': neuron_type, 'source': name, 'distances': distances}))
     return pd.concat(frames, ignore_index=True)
 
 

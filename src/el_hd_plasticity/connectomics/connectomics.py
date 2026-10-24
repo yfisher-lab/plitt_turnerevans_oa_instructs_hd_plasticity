@@ -278,6 +278,19 @@ class EBCoordinateSystem:
                                                         self.eb_vertices_xsec['radius']
                                                         )
 
+    def ring_outline(self, n=361):
+        """Inner and outer outline of the EB mesh in the xy plane of the EB frame (as used by :meth:`to_eb_frame`).
+
+        Returns:
+            Tuple of two (n, 2) arrays (inner and outer edge), each running once around the ring.
+        """
+        phase = np.linspace(-np.pi, np.pi, num=n)
+        lookup = -phase                # the lookups are in the EB basis; the EB frame flips y, i.e. negates the phase
+        edges = []
+        for radius in (self._radius_min_lookup(lookup), self._radius_max_lookup(lookup)):
+            edges.append(np.column_stack((radius * np.cos(phase), radius * np.sin(phase))))
+        return tuple(edges)
+
     def skeleton_to_eb_coords(self, navis_skeleton):
         """Express a navis skeleton's node coordinates in the EB basis (y and z flipped).
 

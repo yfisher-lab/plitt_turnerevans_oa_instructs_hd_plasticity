@@ -64,5 +64,5 @@ if __name__ == "__main__":
     outdir = pathlib.Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    npt_client()
+    client = npt_client()      # keep a reference: neuPrint only holds the default client weakly
     run_kc_type(outdir, processes=args.processes)

@@ -387,3 +387,63 @@ def test_load_codex_uses_the_cell_type_table_of_each_dataset(tmp_path):
     assert d.neurons('EL')['bodyId'].tolist() == [2]
     assert d.connections([1], [2])['weight'].tolist() == [5]
     assert [r[0] for r in client.opened] == ['connections_princeton', 'neurons']
+
+
+def test_ring_outline_follows_the_flipped_eb_frame_and_eb_density_renders():
+    import matplotlib
+    matplotlib.use('Agg')
+    from matplotlib import pyplot as plt
+
+    from el_hd_plasticity.connectomics import plotting as cp
+    eb = real_eb()
+    eb._radius_min_lookup = lambda phase: 1 + .1 * np.sin(phase)     # radius depends on the (unflipped) phase
+    eb._radius_max_lookup = lambda phase: 2 + 0 * phase
+    inner, outer = eb.ring_outline(n=9)
+    assert inner.shape == outer.shape == (9, 2)
+    np.testing.assert_allclose(np.hypot(*outer.T), 2)
+    # the point at EB-frame phase p has the radius the lookup gives at -p (y is flipped)
+    phase = np.linspace(-np.pi, np.pi, 9)
+    np.testing.assert_allclose(np.hypot(*inner.T), 1 + .1 * np.sin(-phase))
+    np.testing.assert_allclose(np.arctan2(inner[:, 1], inner[:, 0]), np.angle(np.exp(1j * phase)), atol=1e-12)
+    rng = np.random.default_rng(0)
+    syn = pd.DataFrame({'x_eb': rng.normal(size=80), 'y_eb': rng.normal(size=80)})
+    fig, axs = cp.plot_eb_density([(syn, 'Greys', .6), (syn, 'Purples', .6)], eb, fill=True, share_axes=False)
+    assert axs.shape == (1, 2) and axs[0, 0].get_aspect() == 1.0
+    plt.close('all')
+
+
+# --- distances between synapses onto different EPG instances ----------------------------------------
+def labeled(x_by_label):
+    rows = [{'x': x, 'y': 0., 'z': 0., 'type': label} for label, xs in x_by_label.items() for x in xs]
+    return pd.DataFrame(rows)
+
+
+def test_calc_instance_distance_is_the_cable_distance_to_the_nearest_synapse_of_another_instance(straight_neuron):
+    res = sd.calc_instance_distance((1, labeled({'A': [500., 600.], 'B': [900.]})))
+    assert list(res['instance']) == ['A', 'A', 'B']
+    np.testing.assert_allclose(res['cable_distance'], [400., 300., 300.], atol=1)        # A@500 -> B@900, A@600 -> B@900, B -> A@600
+
+
+def test_calc_instance_distance_is_nan_beyond_the_cutoff_and_without_another_instance(straight_neuron):
+    far = 2 * sd.MAX_CABLE_NM / sd.VOXEL_NM
+    res = sd.calc_instance_distance((1, labeled({'A': [0.], 'B': [far]})))
+    assert np.isnan(res['cable_distance']).all()                                          # 30 microns apart, cutoff is 15
+    only = sd.calc_instance_distance((1, labeled({'A': [0., 300.]})))
+    assert np.isnan(only['cable_distance']).all()                                         # a single instance has no partner
+
+
+def test_run_instance_distances_and_loader(straight_neuron, tmp_path):
+    syns = labeled({'A': [500.], 'B': [900.]}).assign(bodyId_pre=[1, 1])
+    syns = pd.concat([syns, labeled({'A': [100.], 'B': [200.]}).assign(bodyId_pre=[2, 2])], ignore_index=True)
+    results = sd.run_instance_distances(syns, [1, 2], tmp_path / 'ER4d_epg_instance_distances.pkl', processes=1)
+    assert len(results) == 2
+    table = sd.load_instance_distance_table(tmp_path, ['ER4d'])
+    assert list(table.columns) == ['er', 'source', 'distances'] and set(table['source']) == {'epg_instance'}
+    np.testing.assert_allclose(sorted(table['distances']), sorted([400, 400, 100, 100]) * np.array(sd.VOXEL_NM) / 1000, atol=.02)
+
+
+def test_adjacent_instances_are_the_main_instance_and_its_nearest_neighbors():
+    import pandas as pd
+    syns = pd.DataFrame({'type': ['A'] * 3 + ['B'] * 2 + ['C'] * 2 + ['D'] * 2,
+                         'x_eb': [0] * 3 + [10] * 2 + [30] * 2 + [100] * 2, 'y_eb': 0, 'z_eb': 0})
+    assert sd.adjacent_instances(syns) == ['A', 'B', 'C']
