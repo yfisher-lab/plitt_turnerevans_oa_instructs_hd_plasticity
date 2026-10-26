@@ -110,7 +110,7 @@ def plot_instance_example(skeleton, syns, instances, colors=('black', 'orangered
     fig, ax = plot_neurons_2d([skeleton], colors=skeleton_color, view=view, linewidth=1., ax=ax, figsize=figsize)
     selected = syns[syns['type'].isin(instances)]
     xs, ys = (f'{axis}_eb' for axis in view)
-    for instance, color in zip(instances, colors, strict=True):
+    for instance, color in zip(instances, colors[:len(instances)], strict=True):
         syn = selected[selected['type'] == instance]
         ax.scatter(syn[xs], syn[ys], s=40, color=color, zorder=100, label=f'{instance} (n={len(syn)})')
     ax.set_xlim(selected[xs].min() - margin, selected[xs].max() + margin)
@@ -216,7 +216,7 @@ def plot_connectivity_graph(graph, colors, pos, edge_attr='weight', arrow_scale=
 
 def _distance_axis(ax, xlim=None):
     ax.set_xlabel('approx. cable distance (microns)')
-    ax.set_xticks([0, 4, 8, 12])
+    ax.set_xticks([0, 4, 8, 12, 16])
     ax.xaxis.set_minor_locator(AutoMinorLocator())
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
@@ -243,31 +243,101 @@ def plot_distance_histogram(df, hue_order, palette, bins=None, ax=None, figsize=
     return ax.figure, ax
 
 
-def plot_family_distance_histogram(df, group, source='el', bins=None, color=None, ax=None, figsize=(2, 4)):
+def plot_family_distance_histogram(df, group, source='el', bins=None, color=None, ax=None, figsize=(2, 4), xlims=None):
     """Distribution of cable distances to `source` of one family of ER neuron types (``er`` in `group`)."""
     if ax is None:
         _, ax = plt.subplots(figsize=figsize)
     bins = np.linspace(0, 16, 80) if bins is None else bins
+    xlims = [0, 16] if xlims is None else xlims
     sns.histplot(data=df.loc[(df['source'] == source) & df['er'].isin(group)], x='distances', bins=bins, ax=ax, fill=True,
                  stat='probability', element='poly', common_norm=False, cumulative=False,
                  color=plt.cm.Greens(.8) if color is None else color)
-    _distance_axis(ax, xlim=[0, 16])
+    _distance_axis(ax, xlim=xlims)
     ax.set_title(str(group))
     ax.set_ylim([0, .15])
     return ax.figure, ax
 
 
-def plot_cumulative_distances(df, groups, sources=('el', 'exr2'), bins=None, figsize=(4, 4)):
+def plot_cumulative_distances(df, groups, sources=('el', 'exr2'), bins=None, figsize=(4, 4), xlims = None):
     """Cumulative distance distributions of every ER family: one panel per source (solid for the first, dashed otherwise)."""
     bins = np.linspace(0, 16, 80) if bins is None else bins
+    xlims = [0, 16] if xlims is None else xlims
     fig, axs = plt.subplots(1, len(sources), figsize=figsize)
     for ax, source, linestyle in zip(np.atleast_1d(axs), sources, ('-', '--', ':'), strict=False):
         for group in groups:
             sns.histplot(data=df.loc[(df['source'] == source) & df['er'].isin(group)], x='distances', bins=bins, ax=ax,
                          fill=False, stat='probability', element='poly', common_norm=False, cumulative=True,
                          linestyle=linestyle, linewidth=1 if linestyle != '-' else None)
-        _distance_axis(ax, xlim=[0, 16])
+        _distance_axis(ax, xlim=xlims)
     fig.legend([str(g) for g in groups], bbox_to_anchor=(1.05, 1), loc='lower left', borderaxespad=0.)
+    return fig, axs
+
+
+def plot_distance_ecdf(df, sources, labels=None, colors=None, xlim=(0, 16), ax=None, figsize=(2.5, 2.5)):
+    """Cumulative distance distributions of several sources in one panel, over all the distances (not just `xlim`).
+
+    Unlike :func:`plot_cumulative_distances`, which bins the distances and so renormalises over `xlim`, each curve here
+    is the empirical CDF of every distance of that source: a curve that ends below 1 at the right edge has that
+    fraction of its synapses beyond it.
+
+    Args:
+        df: Table with ``source`` and ``distances`` (microns).
+        sources: Sources to draw, in order.
+        labels: Legend label of each source (default: the source itself).
+        colors: One color per source.
+        xlim: Limits of the distance axis.
+
+    Returns:
+        Tuple of (figure, axes).
+    """
+    if ax is None:
+        _, ax = plt.subplots(figsize=figsize)
+    labels = labels or {}
+    colors = colors if colors is not None else [None] * len(sources)
+    for source, color in zip(sources, colors, strict=True):
+        distances = np.sort(df.loc[df['source'] == source, 'distances'].dropna().to_numpy())
+        ax.plot(distances, np.arange(1, len(distances) + 1) / len(distances), color=color,
+                label=labels.get(source, source))
+    ax.set_ylim([0, 1])
+    ax.set_ylabel('Probability')
+    _distance_axis(ax, xlim=xlim)
+    return ax.figure, ax
+
+
+def plot_distance_stack(df, group, sources, labels=None, colors=None, bins=None, figsize=(3.2, 6), ecdf_height=3.2):
+    """One wide histogram per source, stacked above a square ECDF of all of them, for one family of ER types.
+
+    Args:
+        df: Table with ``er``, ``source`` and ``distances`` (microns).
+        group: ER types to pool in this figure.
+        sources: Sources to draw, one histogram each, in order.
+        labels: Title of each source's panel and its legend entry (default: the source itself).
+        colors: One color per source.
+        bins: Histogram bins (microns); the 0-16 default of :func:`plot_family_distance_histogram` if None.
+        ecdf_height: Height of the ECDF panel, relative to one histogram.
+
+    Returns:
+        Tuple of (figure, list of axes: one per source, then the ECDF).
+    """
+    labels = labels or {}
+    colors = colors if colors is not None else [None] * len(sources)
+    sub = df.loc[df['er'].isin(group)]
+
+    fig = plt.figure(figsize=figsize)
+    gs = GridSpec(len(sources) + 1, 1, height_ratios=[1] * len(sources) + [ecdf_height], figure=fig, hspace=.9)
+    axs = []
+    for position, (source, color) in enumerate(zip(sources, colors, strict=True)):
+        ax = fig.add_subplot(gs[position])
+        plot_family_distance_histogram(sub, group, source=source, bins=bins, color=color, ax=ax)
+        ax.set_title(labels.get(source, source), fontsize=6)
+        ax.set_xlabel('')
+        axs.append(ax)
+    axs[-1].set_xlabel('approx. cable distance (microns)', fontsize=7)
+
+    ax = fig.add_subplot(gs[-1])
+    plot_distance_ecdf(sub, sources, labels=labels, colors=colors, ax=ax)
+    ax.legend(fontsize=5, loc='lower right', frameon=False)
+    axs.append(ax)
     return fig, axs
 
 

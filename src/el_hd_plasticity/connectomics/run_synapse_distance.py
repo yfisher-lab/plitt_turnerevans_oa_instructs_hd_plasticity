@@ -2,10 +2,14 @@
 on ring (ER) neurons of the hemibrain, for each ER type.
 
 Results are pickled per ER type as ``<outdir>/<ER type>_syn_distances.pkl`` (see
-:func:`synapse_distance.calc_syn_distance` for the format). Requires neuPrint access.
+:func:`synapse_distance.calc_syn_distance` for the format).
+
+``--uncapped`` searches without the Euclidean and cable limits, so every synapse with a partner on its neuron gets a
+distance, and writes ``<outdir>/<ER type>_syn_distances_uncapped.pkl`` instead -- the published pickles are left alone.
+Requires neuPrint access.
 
 Usage:
-    python -m el_hd_plasticity.connectomics.run_synapse_distance [--outdir DIR] [--processes N]
+    python -m el_hd_plasticity.connectomics.run_synapse_distance [--outdir DIR] [--processes N] [--uncapped]
 """
 
 import argparse
@@ -54,23 +58,32 @@ def get_er_syn(ertype='ER4d'):
     return pd.concat(syns, ignore_index=True), ers
 
 
-def run_er_type(er_type, outdir, processes=8):
-    """Compute and pickle synapse distances for every neuron of one ER type."""
+def run_er_type(er_type, outdir, processes=8, uncapped=False):
+    """Compute and pickle synapse distances for every neuron of one ER type.
+
+    Args:
+        uncapped: Search without the Euclidean and cable limits, writing to the ``_uncapped`` pickle.
+    """
     syns, nrns = get_er_syn(er_type)
+    suffix = '_uncapped' if uncapped else ''
+    limits = {'max_euclidean_nm': None, 'max_cable_nm': None} if uncapped else {}
     return synapse_distance.run_distances(syns, nrns['bodyId'].tolist(), PRE_TYPE, POST_TYPES,
-                                          outdir / f'{er_type}_syn_distances.pkl', processes=processes)
+                                          outdir / f'{er_type}_syn_distances{suffix}.pkl', processes=processes,
+                                          **limits)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--outdir', default=DEFAULT_OUTDIR, help='folder for the output pickles')
     parser.add_argument('--processes', type=int, default=8)
+    parser.add_argument('--uncapped', action='store_true', help='search without the distance limits')
+    parser.add_argument('--types', nargs='+', default=list(ER_TYPES), help='ER types to analyse')
     args = parser.parse_args()
 
     outdir = pathlib.Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
     client = npt_client()      # keep a reference: neuPrint only holds the default client weakly
-    for er_type in ER_TYPES:
+    for er_type in args.types:
         print(er_type)
-        run_er_type(er_type, outdir, processes=args.processes)
+        run_er_type(er_type, outdir, processes=args.processes, uncapped=args.uncapped)

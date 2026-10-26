@@ -39,8 +39,30 @@ ER_GROUPS = (('ER4d',), ('ER4m',),
              ('ER3m',),
              ('ER1_b', 'ER1_a'))
 
+HEMISPHERES = ('L', 'R')       # the hemisphere of a cell type instance, e.g. EPG(PB08)_L3
 
-def calc_syn_distance(args, pre_type, post_types):
+# The two EPG instances innervating the same EB wedge, paired as in Hulse et al. 2021 (eLife 10:e66039).
+EPG_COLUMN_PAIRS = (('L1', 'R1'), ('L2', 'R8'), ('L3', 'R7'), ('L4', 'R6'),
+                    ('L5', 'R5'), ('L6', 'R4'), ('L7', 'R3'), ('L8', 'R2'))
+EPG_COLUMNS = {side: f'{left}/{right}' for left, right in EPG_COLUMN_PAIRS for side in (left, right)}
+
+
+def instance_hemisphere(instances):
+    """Hemisphere ('L'/'R') of cell type instances like ``EPG(PB08)_L3``; NaN where there is no such suffix."""
+    return pd.Series(instances).str.extract(r'_([LR])\d*$', expand=False).to_numpy()
+
+
+def instance_column(instances):
+    """EB column of EPG instances like ``EPG(PB08)_L3``, pairing the hemispheres as in :data:`EPG_COLUMN_PAIRS`.
+
+    The two instances of a column (e.g. ``EPG(PB08)_L3`` and ``EPG(PB08)_R7``) innervate the same wedge of the EB and
+    share the label ``'L3/R7'``. Instances without an ``_L``/``_R`` suffix give NaN.
+    """
+    suffix = pd.Series(instances).str.extract(r'_([LR]\d+)$', expand=False)
+    return suffix.map(EPG_COLUMNS).to_numpy()
+
+
+def calc_syn_distance(args, pre_type, post_types, max_euclidean_nm=MAX_EUCLIDEAN_NM, max_cable_nm=MAX_CABLE_NM):
     """Distance from each `pre_type` synapse to the nearest synapse of each post structure.
 
     Args:
@@ -48,6 +70,8 @@ def calc_syn_distance(args, pre_type, post_types):
             (columns x, y, z, type, ...) as built for :func:`neuprint.attach_synapses_to_skeleton`.
         pre_type: Value of ``type`` marking the reference synapses.
         post_types: Values of ``type`` of the structures to measure distance to.
+        max_euclidean_nm: Only post synapses closer than this are candidates for the path search; None for all of them.
+        max_cable_nm: Longest path to search (nm); None for no limit.
 
     Returns:
         Dict with 'cable_distance' and 'euclidean_distance', each a dict mapping every post type
@@ -69,8 +93,8 @@ def calc_syn_distance(args, pre_type, post_types):
     # node names of the reference synapses
     pre_nodes = skel.loc[skel['structure'] == pre_type, 'rowId'].tolist()
 
-    euclidean_cutoff = MAX_EUCLIDEAN_NM / VOXEL_NM
-    cable_cutoff = MAX_CABLE_NM / VOXEL_NM
+    euclidean_cutoff = np.inf if max_euclidean_nm is None else max_euclidean_nm / VOXEL_NM
+    cable_cutoff = None if max_cable_nm is None else max_cable_nm / VOXEL_NM
 
     distances, euc_distances = {}, {}
     for key in post_types:
@@ -118,6 +142,8 @@ def calc_instance_distance(args):
     """
     body_id, syns = args[0], args[1].reset_index(drop=True)
     max_cable_nm = args[2] if len(args) > 2 else MAX_CABLE_NM
+    if syns.empty:          # e.g. a neuron without a synapse onto the hemisphere being analysed
+        return {'instance': np.array([], dtype=object), 'cable_distance': np.array([])}
     skel = neu_orig.fetch_skeleton(body_id, heal=True, with_distances=True)
     skel = neu_orig.upsample_skeleton(skel, 1)
     skel = neu_orig.attach_synapses_to_skeleton(skel, syns)
@@ -189,7 +215,8 @@ def label_synapses(syns, label, side):
     return set_synapse_location(syns, side)
 
 
-def run_distances(syns, bodyIds, pre_type, post_types, outfile, processes=8):
+def run_distances(syns, bodyIds, pre_type, post_types, outfile, processes=8,
+                  max_euclidean_nm=MAX_EUCLIDEAN_NM, max_cable_nm=MAX_CABLE_NM):
     """Compute synapse distances for many neurons in parallel and pickle the results.
 
     Args:
@@ -200,30 +227,35 @@ def run_distances(syns, bodyIds, pre_type, post_types, outfile, processes=8):
         outfile: Path of the pickle to write (list of :func:`calc_syn_distance` results, in
             the order of `bodyIds`).
         processes: Number of worker processes.
+        max_euclidean_nm, max_cable_nm: Search limits of :func:`calc_syn_distance`; None for no limit.
 
     Returns:
         The list of results.
     """
     args = neuron_synapse_args(syns, bodyIds, pre_type)
+    calc = partial(calc_syn_distance, pre_type=pre_type, post_types=post_types,
+                   max_euclidean_nm=max_euclidean_nm, max_cable_nm=max_cable_nm)
     with Pool(processes=processes) as pool:
-        results = pool.map(partial(calc_syn_distance, pre_type=pre_type, post_types=post_types), args)
+        results = pool.map(calc, args)
 
     with open(outfile, 'wb') as f:
         pickle.dump(results, f)
     return results
 
 
-def run_instance_distances(syns, bodyIds, outfile, processes=8, max_cable_nm=MAX_CABLE_NM):
+def run_instance_distances(syns, bodyIds, outfile, processes=8, max_cable_nm=MAX_CABLE_NM, neuron_col='bodyId_pre'):
     """Compute :func:`calc_instance_distance` for many neurons in parallel and pickle the results.
 
     Args:
-        syns: Synapse table with ``bodyId_pre`` (the neuron the synapse is located on), x, y, z and ``type`` (group label).
+        syns: Synapse table with x, y, z, ``type`` (group label) and `neuron_col`.
         bodyIds: Body IDs of the neurons to analyse.
         outfile: Path of the pickle to write (list of results in the order of `bodyIds`).
         processes: Number of worker processes.
         max_cable_nm: Longest path to search (nm); None for no limit.
+        neuron_col: Column naming the neuron each synapse is located on -- ``bodyId_pre`` when the distances are
+            measured along the presynaptic neuron, ``bodyId_post`` when they are measured along the postsynaptic one.
     """
-    args = [(body_id, syns.loc[syns['bodyId_pre'] == body_id, ['x', 'y', 'z', 'type']], max_cable_nm)
+    args = [(body_id, syns.loc[syns[neuron_col] == body_id, ['x', 'y', 'z', 'type']], max_cable_nm)
             for body_id in bodyIds]
     with Pool(processes=processes) as pool:
         results = pool.map(calc_instance_distance, args)
@@ -270,18 +302,26 @@ def load_distance_table(folder, types, structures, names=None, filename='{type}_
     return pd.concat(frames, ignore_index=True)
 
 
-def load_instance_distance_table(folder, types, name='epg_instance', filename='{type}_epg_instance_distances.pkl'):
+def load_instance_distance_table(folder, types, name='epg_column', filename='{type}_epg_column_distances.pkl'):
     """Distances to the nearest synapse of another group (see :func:`calc_instance_distance`) as a long table.
 
+    Args:
+        folder: Folder with the pickles written by :mod:`run_epg_instance_distance`.
+        types: Neuron types (formatted into `filename`).
+        name: Label of these distances in the ``source`` column.
+        filename: File name pattern of the pickle of each type.
+
     Returns:
-        DataFrame with ``er`` (the neuron type), ``source`` (`name`) and ``distances`` (microns; NaN where no synapse of
-        another group was within range), in the format of :func:`load_distance_table`.
+        DataFrame with ``er`` (the neuron type), ``source`` (`name`), ``group`` (the EPG group the synapse belongs to)
+        and ``distances`` (microns; NaN where no synapse of another group was within range), in the format of
+        :func:`load_distance_table`.
     """
     frames = []
     for neuron_type in types:
         results = load_results(pathlib.Path(folder) / filename.format(type=neuron_type))
         distances = np.concatenate([r['cable_distance'] for r in results]) * VOXEL_NM / 1000
-        frames.append(pd.DataFrame({'er': neuron_type, 'source': name, 'distances': distances}))
+        groups = np.concatenate([r['instance'] for r in results])
+        frames.append(pd.DataFrame({'er': neuron_type, 'source': name, 'group': groups, 'distances': distances}))
     return pd.concat(frames, ignore_index=True)
 
 

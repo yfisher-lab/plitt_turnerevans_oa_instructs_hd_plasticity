@@ -432,18 +432,80 @@ def test_calc_instance_distance_is_nan_beyond_the_cutoff_and_without_another_ins
     assert np.isnan(only['cable_distance']).all()                                         # a single instance has no partner
 
 
+def test_calc_instance_distance_without_synapses_returns_empty_arrays(straight_neuron):
+    res = sd.calc_instance_distance((1, labeled({})))      # a neuron with no synapse in the hemisphere analysed
+    assert len(res['instance']) == 0 and len(res['cable_distance']) == 0
+
+
 def test_run_instance_distances_and_loader(straight_neuron, tmp_path):
     syns = labeled({'A': [500.], 'B': [900.]}).assign(bodyId_pre=[1, 1])
     syns = pd.concat([syns, labeled({'A': [100.], 'B': [200.]}).assign(bodyId_pre=[2, 2])], ignore_index=True)
-    results = sd.run_instance_distances(syns, [1, 2], tmp_path / 'ER4d_epg_instance_distances.pkl', processes=1)
+    results = sd.run_instance_distances(syns, [1, 2], tmp_path / 'ER4d_epg_column_distances.pkl', processes=1)
     assert len(results) == 2
     table = sd.load_instance_distance_table(tmp_path, ['ER4d'])
-    assert list(table.columns) == ['er', 'source', 'distances'] and set(table['source']) == {'epg_instance'}
-    np.testing.assert_allclose(sorted(table['distances']), sorted([400, 400, 100, 100]) * np.array(sd.VOXEL_NM) / 1000, atol=.02)
+    assert list(table.columns) == ['er', 'source', 'group', 'distances']
+    assert set(table['source']) == {'epg_column'} and set(table['group']) == {'A', 'B'}
+    np.testing.assert_allclose(sorted(table['distances']), sorted([400, 400, 100, 100]) * np.array(sd.VOXEL_NM) / 1000,
+                               atol=.02)
+
+
+def test_instance_hemisphere_reads_the_instance_suffix():
+    instances = pd.Series(['EPG(PB08)_L3', 'EPG(PB08)_R6', 'ER4d(ring)_R', 'something'])
+    assert list(sd.instance_hemisphere(instances)[:3]) == ['L', 'R', 'R']
+    assert pd.isna(sd.instance_hemisphere(instances)[3])
+
+
+def test_instance_column_pairs_the_hemispheres_as_in_hulse_2021():
+    instances = pd.Series(['EPG(PB08)_L3', 'EPG(PB08)_R7', 'EPG(PB08)_L1', 'EPG(PB08)_R1', 'EPG(PB08)_R8', 'ER4d(ring)_R'])
+    columns = sd.instance_column(instances)
+    assert columns[0] == columns[1] == 'L3/R7'                 # R7 innervates the same wedge as L3
+    assert columns[2] == columns[3] == 'L1/R1'
+    assert columns[4] == 'L2/R8' and pd.isna(columns[5])
+    assert len(set(sd.EPG_COLUMNS.values())) == 8 and len(sd.EPG_COLUMNS) == 16
 
 
 def test_adjacent_instances_are_the_main_instance_and_its_nearest_neighbors():
-    import pandas as pd
     syns = pd.DataFrame({'type': ['A'] * 3 + ['B'] * 2 + ['C'] * 2 + ['D'] * 2,
                          'x_eb': [0] * 3 + [10] * 2 + [30] * 2 + [100] * 2, 'y_eb': 0, 'z_eb': 0})
     assert sd.adjacent_instances(syns) == ['A', 'B', 'C']
+
+
+def test_run_instance_distances_can_measure_along_the_postsynaptic_neuron(straight_neuron, tmp_path):
+    syns = labeled({'A': [500.], 'B': [900.]}).assign(bodyId_pre=[7, 8], bodyId_post=[1, 1])
+    sd.run_instance_distances(syns, [1], tmp_path / 'ER4d_epg_post_source_distances.pkl', processes=1,
+                              neuron_col='bodyId_post')
+    table = sd.load_instance_distance_table(tmp_path, ['ER4d'], name='epg_post_source',
+                                            filename='{type}_epg_post_source_distances.pkl')
+    assert set(table['group']) == {'A', 'B'}          # both synapses are on neuron 1, 400 voxels apart
+    np.testing.assert_allclose(table['distances'], [400 * sd.VOXEL_NM / 1000] * 2, atol=.02)
+
+
+def test_plot_distance_ecdf_curves_end_at_the_fraction_within_the_axis():
+    import matplotlib
+    matplotlib.use('Agg')
+    from matplotlib import pyplot as plt
+
+    from el_hd_plasticity.connectomics import plotting as cp
+    df = pd.DataFrame({'source': ['a'] * 4 + ['b'] * 2, 'distances': [1., 2., 3., 100., 1., 2.]})
+    fig, ax = cp.plot_distance_ecdf(df, ('a', 'b'), labels={'a': 'A'}, colors=('black', 'red'), xlim=(0, 16))
+    within = [line.get_ydata()[(line.get_xdata() <= 16)][-1] for line in ax.lines]
+    assert within == [0.75, 1.0]                                  # 'a' has one distance beyond the axis
+    assert [line.get_label() for line in ax.lines] == ['A', 'b']
+    plt.close(fig)
+
+
+def test_neuron_synapse_args_keeps_both_structures_on_the_postsynaptic_neuron():
+    # 'er_post' and 'el_post' are both located on the EPG, so both are selected by bodyId_post
+    syns = pd.DataFrame({'type': ['er_post', 'el_post', 'er_post'], 'bodyId_pre': [7, 9, 8], 'bodyId_post': [1, 1, 2]})
+    (body_id, selected), = sd.neuron_synapse_args(syns, [1], 'er_post')
+    assert body_id == 1 and list(selected['type']) == ['er_post', 'el_post']
+
+
+def test_calc_syn_distance_uncapped_finds_partners_beyond_the_default_limits(straight_neuron):
+    far = 3 * sd.MAX_CABLE_NM / sd.VOXEL_NM                       # 45 microns along the neurite
+    syns = pd.DataFrame([{'x': 0., 'y': 0., 'z': 0., 'type': 'a_pre'},
+                         {'x': far, 'y': 0., 'z': 0., 'type': 'b_post'}])
+    capped = sd.calc_syn_distance((1, syns), 'a_pre', ['b_post'])
+    assert np.isnan(capped['cable_distance']['b_post']).all()
+    uncapped = sd.calc_syn_distance((1, syns), 'a_pre', ['b_post'], max_euclidean_nm=None, max_cable_nm=None)
+    np.testing.assert_allclose(uncapped['cable_distance']['b_post'], [far], rtol=.01)
