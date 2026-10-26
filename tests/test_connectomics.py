@@ -509,3 +509,12 @@ def test_calc_syn_distance_uncapped_finds_partners_beyond_the_default_limits(str
     assert np.isnan(capped['cable_distance']['b_post']).all()
     uncapped = sd.calc_syn_distance((1, syns), 'a_pre', ['b_post'], max_euclidean_nm=None, max_cable_nm=None)
     np.testing.assert_allclose(uncapped['cable_distance']['b_post'], [far], rtol=.01)
+
+
+def test_uncapped_and_capped_syn_distance_agree_within_the_cutoffs(straight_neuron):
+    syns = pd.DataFrame([{'x': x, 'y': 0., 'z': 0., 'type': 'a_pre'} for x in (0., 300., 700.)]
+                        + [{'x': x, 'y': 0., 'z': 0., 'type': 'b_post'} for x in (500., 1200.)])
+    capped = sd.calc_syn_distance((1, syns), 'a_pre', ['b_post'])
+    uncapped = sd.calc_syn_distance((1, syns), 'a_pre', ['b_post'], max_euclidean_nm=None, max_cable_nm=None)
+    for key in ('cable_distance', 'euclidean_distance'):
+        np.testing.assert_allclose(capped[key]['b_post'], uncapped[key]['b_post'], atol=1)

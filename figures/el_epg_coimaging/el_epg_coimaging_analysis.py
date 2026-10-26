@@ -39,6 +39,7 @@ RHO_MIN = .05                                    # minimum PV magnitude for a ti
 TURN_ALIGNMENT = 'phase'                         # 'phase': sub-ROI bump phase shift; 'max': whole-ROI peak shift
 ANGLE_TICKS = [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4, np.pi]
 ANGLE_TICK_LABELS = ['0', r'$\pi$/4', r'$\pi$/2', r'$3\pi$/4', r'$\pi$']
+SCATTER_ALPHA=.4
 
 
 # ----------------------------------------------------------------------------
@@ -56,14 +57,16 @@ def merge_closed_loop(stats_df):
     return stats_df
 
 
-def paired_dark_vs_cl_plot(df, ycol, ylabel, ylim=(0, np.pi), yticks=ANGLE_TICKS, yticklabels=ANGLE_TICK_LABELS):
+def paired_dark_vs_cl_plot(df, ycol, ylabel, ylim=(0, np.pi), yticks=ANGLE_TICKS, yticklabels=ANGLE_TICK_LABELS, scatter_alpha=SCATTER_ALPHA):
     """Dark (x=0) vs closed loop (x=1) value per fly (points only, not joined); the style of the EPG-across-dark plots.
 
     Args:
         df: Table with fly_id, ``cl`` (0 / 1) and `ycol`.
     """
     fig, ax = plt.subplots(figsize=[2, 4])
-    nmp.plotting.paired_plot(ax, df, 'cl', [(0, 'dark', DARK_COLOR), (1, 'closed loop', CL_COLOR)], ycol, connect=False)
+    nmp.plotting.paired_plot(ax, df, 'cl', [(0, 'dark', DARK_COLOR), (1, 'closed loop', CL_COLOR)], ycol, connect=False,
+                             scatter_alpha=SCATTER_ALPHA)
+    
     ax.set_ylabel(ylabel)
     ax.set_ylim(ylim)
     ax.set_yticks(yticks, labels=yticklabels)
@@ -261,6 +264,9 @@ def plot_pva_diff(sess_manager, offset_unique):
     fig, ax = paired_dark_vs_cl_plot(offset_unique, 'pva_diff', r'$| \Delta PVA |$')
     ax.axhline(np.pi / 2, color='k', linestyle='--', label='chance', zorder=-1)
     ax.axhline(np.pi / 4, color='r', linestyle='--', label='1 glomerulus', zorder=-1)
+
+    ax.plot([-.05, .05], np.median(offset_unique.loc[offset_unique['cl']==0,'pva_diff'])*np.ones([2,]), color=plt.cm.Purples(.8), linewidth=8)
+    ax.plot([1-.05, 1+.05], np.median(offset_unique.loc[offset_unique['cl']==1, 'pva_diff'])*np.ones([2,]), color='black', linewidth=8)
     ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1.0), fontsize=8, frameon=False)
     fig.savefig(sess_manager.fig_folder / 'PVA_diff.pdf', bbox_inches='tight')
 

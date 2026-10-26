@@ -19,6 +19,7 @@ import networkx as nx
 import neuprint as neu_orig
 import numpy as np
 import pandas as pd
+from scipy.spatial import cKDTree
 
 # neuPrint coordinates are in voxels of 8 nm
 VOXEL_NM = 8
@@ -100,6 +101,12 @@ def calc_syn_distance(args, pre_type, post_types, max_euclidean_nm=MAX_EUCLIDEAN
     for key in post_types:
         post_syns = skel.loc[skel['structure'] == key, :]
 
+        if cable_cutoff is None:
+            # Without a limit every post synapse is a candidate, so one multi-source search over the whole skeleton
+            # answers every reference synapse at once -- far cheaper than a search per synapse.
+            distances[key], euc_distances[key] = _uncapped_distances(skel, skel_nx, pre_nodes, post_syns)
+            continue
+
         distances[key] = np.zeros((len(pre_nodes),))
         euc_distances[key] = np.zeros((len(pre_nodes),))
         for i, pre_node in enumerate(pre_nodes):
@@ -122,6 +129,25 @@ def calc_syn_distance(args, pre_type, post_types, max_euclidean_nm=MAX_EUCLIDEAN
                 euc_distances[key][i] = np.nan
 
     return {'cable_distance': distances, 'euclidean_distance': euc_distances}
+
+
+def _uncapped_distances(skel, skel_nx, pre_nodes, post_syns):
+    """Cable and Euclidean distance from every node of `pre_nodes` to the nearest of `post_syns`, without a limit.
+
+    Returns:
+        Tuple of (cable distances, Euclidean distances) in voxels, one per reference synapse; NaN where there is no
+        post synapse or no path to one.
+    """
+    empty = np.full(len(pre_nodes), np.nan)
+    if post_syns.empty or not pre_nodes:
+        return empty, empty.copy()
+
+    reach = nx.multi_source_dijkstra_path_length(skel_nx, post_syns['rowId'].tolist(), weight='distance')
+    cable = np.array([reach.get(node, np.nan) for node in pre_nodes])
+
+    pre_xyz = skel.set_index('rowId').loc[pre_nodes, ['x', 'y', 'z']].to_numpy()
+    euclidean, _ = cKDTree(post_syns[['x', 'y', 'z']].to_numpy()).query(pre_xyz)
+    return cable, euclidean
 
 
 def calc_instance_distance(args):

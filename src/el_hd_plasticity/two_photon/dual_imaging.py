@@ -20,7 +20,7 @@ from . import bump_shape, plotting, session, stats, utilities
 from .utilities import DEFAULT_OFFSET_BINS, DEFAULT_PLOT_TIMES, binned_mean, wrap_angle
 
 CH_COLORS = ('Greys', 'Greens')  # default colormaps for (EPG, EL)
-
+ 
 
 # ----------------------------------------------------------------------------
 # Offset statistics
@@ -582,4 +582,4 @@ def plot_sess_heatmaps_w_hist(ts, fly_id, sess_name, vmin=-.5, vmax=3, plot_time
     """
     return plotting.plot_heatmaps_with_offset_hist(
         _channel_traces(ts, (ch1_heatmap, ch2_heatmap)), f'{fly_id} - {sess_name}', figsize=[8, 4],
-        vmin=vmin, vmax=vmax, plot_times=plot_times, twindow=twindow, bins=bins, hist_title='variance')
+        vmin=vmin, vmax=vmax, plot_times=plot_times, twindow=twindow, bins=bins, hist_title='vec length')

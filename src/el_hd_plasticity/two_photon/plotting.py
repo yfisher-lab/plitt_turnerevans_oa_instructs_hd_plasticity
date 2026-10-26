@@ -355,7 +355,7 @@ def despine(ax, bottom=False):
         ax.spines[side].set_visible(False)
 
 
-def paired_plot(ax, df, xcol, levels, ycol, connect=True):
+def paired_plot(ax, df, xcol, levels, ycol, connect=True, scatter_alpha=None, plot_mean=False):
     """One value per fly at each of several x positions on `ax`, optionally joined by lines.
 
     Points are colored by level and jittered horizontally per fly. The x-ticks, x-limits and spines are
@@ -371,11 +371,13 @@ def paired_plot(ax, df, xcol, levels, ycol, connect=True):
     df = df.copy()
     df['x'] = df[xcol].map({value: i for i, (value, _, _) in enumerate(levels)}) \
         + df['fly_id'].map(utilities.fly_jitter(df['fly_id']))
+    scatter_alpha=1. if scatter_alpha is None else scatter_alpha
     if connect:
         sns.lineplot(data=df, x='x', y=ycol, units='fly_id', estimator=None, color='black', zorder=-10,
                      ax=ax, alpha=.3)
     sns.scatterplot(data=df, x='x', y=ycol, hue=xcol, palette={value: color for value, _, color in levels},
-                    s=100, legend=False, ax=ax)
+                    s=100, legend=False, ax=ax, alpha=scatter_alpha)
+    
     ax.set_xticks(range(len(levels)), labels=[label for _, label, _ in levels])
     ax.set_xlabel('')
     ax.set_ylabel('')

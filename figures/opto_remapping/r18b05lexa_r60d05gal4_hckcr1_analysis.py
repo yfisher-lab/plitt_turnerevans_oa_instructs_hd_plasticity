@@ -27,7 +27,7 @@ from el_hd_plasticity.two_photon.remapping import (
 BASEDIR = pathlib.Path('/media/mplitt/SSD_storage/2P_scratch/R18B05LexA_CsChrimsontdT_R60D05Gal4_jGCaMP7f_hcKCR1')
 DEFAULT_FIGDIR = pathlib.Path('/media/mplitt/SSD_storage/fig_scratch/R18B05LexA_CsChrimsontdT_R60D05Gal4_jGCaMP7f_hckcr1')
 
-GROUPS = [Group('exp', 'EL stim, EPG HcKCR1', 'green'),
+GROUPS = [Group('exp', 'EL stim, EPG HcKCR1', plt.cm.Purples(.8)),
           Group('no_cschrimson', 'EPG HcKCR1', 'black')]
 REFERENCE = 'exp'  # group the other groups are compared with
 ZERO_GROUPS = ('no_cschrimson',)  # groups whose first post-cue offset is unwrapped toward baseline

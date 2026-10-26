@@ -336,7 +336,7 @@ def plot_distance_stack(df, group, sources, labels=None, colors=None, bins=None,
 
     ax = fig.add_subplot(gs[-1])
     plot_distance_ecdf(sub, sources, labels=labels, colors=colors, ax=ax)
-    ax.legend(fontsize=5, loc='lower right', frameon=False)
+    ax.legend(fontsize=5, loc='upper left', bbox_to_anchor=(0, -.42), frameon=False)    # below the panel, clear of the curves and the x label
     axs.append(ax)
     return fig, axs
 
