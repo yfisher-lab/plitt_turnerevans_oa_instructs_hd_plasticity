@@ -12,7 +12,7 @@ import numpy as np
 from matplotlib import gridspec
 from matplotlib import pyplot as plt
 
-from . import plotting, session, stats, utilities
+from . import bump_shape, plotting, session, stats, utilities
 from .utilities import DEFAULT_OFFSET_BINS, DEFAULT_PLOT_TIMES
 
 
@@ -99,22 +99,29 @@ def reformat_rho_stats_for_reg(grouped_stats, dh_bins):
     return df[['fly_id', 'closed_loop', 'rho', 'log_rho', 'dh', 'F', 'log_F']]
 
 
-def align_peaks_split_halves(session_manager, rot_speed_mask=True, min_rot_speed=.5):
+def align_peaks_split_halves(session_manager, rot_speed_mask=True, min_rot_speed=.5, alignment='phase'):
     """Heading-aligned mean activity profile of the first and second half of each closed-loop session.
 
     For each closed-loop session the heading-aligned activity is averaged over the first and
-    second half of the (optionally rotation-speed-masked) time points. Both halves are rolled by
-    the same amount, chosen so the first half's peak sits at the center ROI, which shows whether
-    the peak location is stable within a session.
+    second half of the (optionally rotation-speed-masked) time points. Both halves are shifted by
+    the same amount, chosen so the first half's bump sits at the center ROI, which shows whether
+    the bump location is stable within a session.
 
     Args:
         session_manager: Session manager object.
         rot_speed_mask: If True, only use time points with rotation speed above `min_rot_speed`.
         min_rot_speed: Rotation speed threshold (rad/s).
+        alignment: 'phase' (default) shifts to sub-ROI precision by nulling the first-harmonic phase, as in
+            the dual imaging analyses (:func:`bump_shape.shift_by_phase`); 'max' rolls by whole ROIs so the
+            peak ROI is at the center (:func:`bump_shape.shift_by_max`).
 
     Returns:
         Tuple of two (n_sessions, n_rois) arrays: aligned first-half and second-half profiles.
     """
+    shifts = {'phase': bump_shape.shift_by_phase, 'max': bump_shape.shift_by_max}
+    if alignment not in shifts:
+        raise ValueError(f"alignment must be 'phase' or 'max', not {alignment!r}")
+
     first_half_aligned, second_half_aligned = [], []
     for _, row in session_manager.iterrows():
         if row['closed_loop'] > 0:
@@ -127,12 +134,13 @@ def align_peaks_split_halves(session_manager, rot_speed_mask=True, min_rot_speed
                 dff_h_aligned = ts.dff_h_aligned
 
             split = dff_h_aligned.shape[1] // 2
-            first_half = dff_h_aligned[:, :split].mean(axis=1)
-            second_half = dff_h_aligned[:, split:].mean(axis=1)
-
-            shift = np.argmax(first_half)
-            first_half_aligned.append(np.roll(first_half, -shift - utilities.HEADING_CENTER_ROI))
-            second_half_aligned.append(np.roll(second_half, -shift - utilities.HEADING_CENTER_ROI, axis=0))
+            # the two half means as the two "channels" of one time point, so both are shifted by the
+            # first half's bump position and any drift between the halves is preserved
+            halves = np.stack([dff_h_aligned[:, :split].mean(axis=1),
+                               dff_h_aligned[:, split:].mean(axis=1)])[:, :, np.newaxis]
+            aligned = shifts[alignment](halves, 0)[:, :, 0]
+            first_half_aligned.append(aligned[0])
+            second_half_aligned.append(aligned[1])
 
     return np.stack(first_half_aligned), np.stack(second_half_aligned)
 

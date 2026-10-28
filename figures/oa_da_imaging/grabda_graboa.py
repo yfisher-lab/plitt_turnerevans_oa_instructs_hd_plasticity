@@ -80,7 +80,7 @@ def plot_offset_summary(figdir, offset_unique, col, ylabel, ylim, filename):
 
     Each panel is styled like the paired plots of ``epg_across_dark_analysis`` (2 x 4 in, no bottom spine).
     """
-    fig, axs = plt.subplots(1, len(GROUPS), sharey=True, figsize=[2 * len(GROUPS), 4])
+    fig, axs = plt.subplots(1, len(GROUPS), sharey=True, figsize=[2 * len(GROUPS) + .5, 4])
     for ax, group in zip(axs, GROUPS, strict=True):
         df = offset_unique.loc[offset_unique['group'] == group].copy()
         nmp.plotting.paired_plot(ax, df, 'closed_loop', [(0, 'dark', DARK_COLOR), (1, 'closed loop', CL_COLOR)], col)

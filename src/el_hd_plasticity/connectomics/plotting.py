@@ -92,7 +92,7 @@ def plot_neurons_2d(items, colors=None, view=('x', 'y'), ax=None, figsize=(5, 5)
 
 
 def plot_instance_example(skeleton, syns, instances, colors=('black', 'orangered', 'dodgerblue'), view=('x', 'y'), margin=400,
-                          bar_um=5, skeleton_color=None, ax=None, figsize=(5, 3)):
+                          bar_um=5, skeleton_color=None, ax=None, figsize=(5, 3), legend=False):
     """An axon segment with the synapses of a few EPG instances, zoomed on those synapses.
 
     Args:
@@ -113,11 +113,14 @@ def plot_instance_example(skeleton, syns, instances, colors=('black', 'orangered
     for instance, color in zip(instances, colors[:len(instances)], strict=True):
         syn = selected[selected['type'] == instance]
         ax.scatter(syn[xs], syn[ys], s=40, color=color, zorder=100, label=f'{instance} (n={len(syn)})')
-    ax.set_xlim(selected[xs].min() - margin, selected[xs].max() + margin)
-    ax.set_ylim(selected[ys].min() - margin, selected[ys].max() + margin)
+    ax.set_xlim(selected[xs].min() - margin-500, selected[xs].max() + margin)
+    # ax.set_ylim(selected[ys].min() - margin, selected[ys].max() + margin)
+    ax.set_ylim([-4200,100])
     x0, y0 = ax.get_xlim()[0] + 100, ax.get_ylim()[0] + 100
     ax.plot([x0, x0], [y0, y0 + bar_um * 1000 / 8], linewidth=5, color='black')
-    ax.legend(loc='upper left', bbox_to_anchor=(1.0, 1.0), frameon=False)
+    
+    if legend:
+        ax.legend(loc='upper left', bbox_to_anchor=(1.0, 1.0), frameon=False)
     return fig, ax
 
 
@@ -125,6 +128,60 @@ def phase_colormap(n=18):
     """Function mapping a ring phase in (-pi, pi] to a color of a circular palette."""
     cmap = sns.color_palette('hls', n, as_cmap=True)
     return lambda phase: cmap((phase + np.pi) / 2 / np.pi)
+
+
+def plot_grouped_synapses(skeleton, syns, colors, group_col='type', view=('x', 'y'), bar_um=10,
+                          skeleton_color=None, items=(), item_color=None, ax=None, figsize=(5, 5),
+                          s=20, legend=True, xlim=None, ylim=None, linewidth=1, **kwargs):
+    """A neuron with every synapse colored by the group it belongs to.
+
+    Args:
+        skeleton: The neuron's skeleton in the EB frame (:meth:`EBCoordinateSystem.fetch_skeleton`).
+        syns: Its synapses with ``x_eb``, ``y_eb``, ``z_eb`` and `group_col` columns.
+        colors: Mapping from group label to color (e.g. the ring phase of each group through
+            :func:`phase_colormap`), in the order the groups are drawn and listed; groups missing from
+            it are not drawn.
+        group_col: Column of `syns` holding the group label, e.g. the EPG column of a synapse.
+        view: The two axes of the projection.
+        bar_um: Length of the scale bar in microns.
+        skeleton_color: Color of the neuron; the color it has in the other anatomy panels by default.
+        items: Further navis items drawn under the neuron, e.g. the EB mesh.
+        item_color: Color of `items`.
+        s: Size of the synapse markers.
+        legend: Label each group with its name and synapse count.
+        xlim, ylim: Axis limits, to zoom on a section of the neuron; the whole neuron if None. Synapses
+            outside them are left out, so the legend counts the synapses actually in the view.
+        **kwargs: Further arguments of :func:`plot_neurons_2d`, e.g. ``shade_by``, ``smin``, ``smax``.
+
+    Returns:
+        Tuple of (figure, axes).
+    """
+    skeleton_color = plt.cm.cool(.7) if skeleton_color is None else skeleton_color
+    item_color = plt.cm.Greys(.3) if item_color is None else item_color
+    # navis colors the neurons of `items` before its volumes, whatever order they are passed in
+    fig, ax = plot_neurons_2d([skeleton, *items], colors=[skeleton_color] + [item_color] * len(items),
+                              view=view, linewidth=linewidth, ax=ax, figsize=figsize, **kwargs)
+
+    xs, ys = (f'{axis}_eb' for axis in view)
+    for axis, limits in ((xs, xlim), (ys, ylim)):      # what falls outside the view is invisible anyway, and
+        if limits is not None:                         # dropping it keeps the legend's counts to what is drawn
+            syns = syns[syns[axis].between(*sorted(limits))]
+    present = set(syns[group_col].dropna())
+    for group, color in colors.items():
+        if group not in present:
+            continue
+        syn = syns[syns[group_col] == group]
+        ax.scatter(syn[xs], syn[ys], s=s, color=color, zorder=100, label=f'{group} (n={len(syn)})')
+
+    if xlim is not None:
+        ax.set_xlim(xlim)
+    if ylim is not None:
+        ax.set_ylim(ylim)
+    x0, y0 = ax.get_xlim()[0] + 100, ax.get_ylim()[0] + 100
+    ax.plot([x0, x0], [y0, y0 + bar_um * 1000 / 8], linewidth=5, color='black')
+    if legend:
+        ax.legend(loc='upper left', bbox_to_anchor=(1.0, 1.0), frameon=False)
+    return fig, ax
 
 
 def xsec_outline(ebcoords):

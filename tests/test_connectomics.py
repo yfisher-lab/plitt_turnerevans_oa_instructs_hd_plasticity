@@ -9,6 +9,7 @@ import pytest
 pytest.importorskip('neuprint')
 pytest.importorskip('navis')
 
+import navis
 import neuprint
 
 from el_hd_plasticity.connectomics import connectomics as cn
@@ -468,6 +469,39 @@ def test_adjacent_instances_are_the_main_instance_and_its_nearest_neighbors():
     syns = pd.DataFrame({'type': ['A'] * 3 + ['B'] * 2 + ['C'] * 2 + ['D'] * 2,
                          'x_eb': [0] * 3 + [10] * 2 + [30] * 2 + [100] * 2, 'y_eb': 0, 'z_eb': 0})
     assert sd.adjacent_instances(syns) == ['A', 'B', 'C']
+
+
+def test_group_phase_is_the_angle_of_each_groups_centre_of_mass():
+    # four groups a quarter turn apart on the ring, each spread over a pair of synapses
+    syns = pd.DataFrame({'type': ['E', 'E', 'N', 'N', 'W', 'W', 'S', 'S'],
+                         'x_eb': [9, 11, 1, -1, -11, -9, -1, 1],
+                         'y_eb': [-1, 1, 9, 11, 1, -1, -11, -9]})
+    phases = sd.group_phase(syns)
+    np.testing.assert_allclose([phases['E'], phases['N'], phases['W'], phases['S']],
+                               [0, np.pi / 2, np.pi, -np.pi / 2], atol=1e-12)
+
+
+def test_plot_grouped_synapses_draws_the_groups_of_the_palette_in_its_order():
+    import matplotlib
+    matplotlib.use('Agg')
+    from matplotlib import pyplot as plt
+
+    from el_hd_plasticity.connectomics import plotting as cp
+    syns = pd.DataFrame({'type': ['A', 'A', 'B', 'C'], 'x_eb': [0., 1., 2., 3.],
+                         'y_eb': [0., 1., 2., 3.], 'z_eb': 0.})
+    colors = {'B': (1., 0., 0.), 'A': (0., 0., 1.),       # 'C' has no color, 'unused' has no synapses
+              'unused': (0., 1., 0.)}
+    skeleton = navis.TreeNeuron(line_skeleton().rename(columns={'rowId': 'node_id', 'link': 'parent_id'}))
+    fig, ax = cp.plot_grouped_synapses(skeleton, syns, colors)
+    drawn = [c for c in ax.collections if not c.get_label().startswith('_')]   # the rest is the skeleton
+    assert [c.get_label() for c in drawn] == ['B (n=1)', 'A (n=2)']
+
+    _, zoomed = cp.plot_grouped_synapses(skeleton, syns, colors, xlim=(.5, 4.), ylim=(.5, 4.))
+    in_view = [c for c in zoomed.collections if not c.get_label().startswith('_')]
+    assert [c.get_label() for c in in_view] == ['B (n=1)', 'A (n=1)']   # one A synapse is outside the view
+    for collection, group in zip(drawn, ('B', 'A'), strict=True):
+        np.testing.assert_allclose(collection.get_facecolor()[0][:3], colors[group])
+    plt.close(fig)
 
 
 def test_run_instance_distances_can_measure_along_the_postsynaptic_neuron(straight_neuron, tmp_path):

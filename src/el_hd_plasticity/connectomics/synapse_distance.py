@@ -208,6 +208,21 @@ def adjacent_instances(syns, n_neighbors=2):
     return [main] + [instance for instance in neighbors if instance != main][:n_neighbors]
 
 
+def group_phase(syns, group_col='type'):
+    """Ring phase of the centre of mass of each group's synapses.
+
+    Args:
+        syns: Synapse table with ``x_eb`` and ``y_eb`` columns (see :func:`connectomics.add_eb_coords`)
+            and `group_col`.
+        group_col: Column holding the group label, e.g. the EB column of :func:`instance_column`.
+
+    Returns:
+        Series of phases in (-pi, pi], indexed by group label.
+    """
+    centroid = syns.groupby(group_col)[['x_eb', 'y_eb']].mean()
+    return np.arctan2(centroid['y_eb'], centroid['x_eb'])
+
+
 def neuron_synapse_args(syns, bodyIds, pre_type):
     """Split a pooled synapse table into one (bodyId, synapses) argument per neuron.
 

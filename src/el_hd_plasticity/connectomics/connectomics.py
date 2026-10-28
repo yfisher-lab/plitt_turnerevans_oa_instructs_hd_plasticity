@@ -105,6 +105,22 @@ class EBCoordinateSystem:
         """navis skeleton of a neuron (see :func:`navis.interfaces.neuprint.fetch_skeletons`) in the EB frame."""
         return self.skeleton_to_eb_coords(neu.fetch_skeletons(body_id))
 
+    def fetch_skeletons(self, body_ids):
+        """navis skeletons of several neurons in the EB frame, fetched in one query.
+
+        Args:
+            body_ids: Body IDs of the neurons.
+
+        Returns:
+            navis NeuronList with one skeleton per body ID.
+        """
+        skeletons = neu.fetch_skeletons(list(body_ids))
+        for skeleton in skeletons:
+            nodes = skeleton.nodes.copy()
+            nodes.loc[:, ['x', 'y', 'z']] = self.to_eb_frame(nodes.loc[:, ['x', 'y', 'z']].values).astype(np.float32)
+            skeleton.nodes = nodes
+        return skeletons
+
     @staticmethod
     def cart3d_to_polar2d(x):
         """Convert 3D Cartesian coordinates to 2D polar coordinates.

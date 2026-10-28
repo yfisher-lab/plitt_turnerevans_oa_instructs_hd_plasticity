@@ -257,10 +257,10 @@ def plot_heatmaps_with_offset_hist(traces, title, figsize, vmin=-.5, vmax=3, plo
 
         hist, centers = utilities.normalized_histogram(tr.offset, bins)
         if tr.hatch is None:
-            hist_axs[row].fill_betweenx(centers, 0, hist, color=cmap(.8), alpha=.5)
+            hist_axs[row].fill_betweenx(centers, 0, hist, color=tr.draw_color, alpha=.5)
         else:
             hist_axs[row].fill_betweenx(centers, 0, hist, alpha=1, hatch=tr.hatch,
-                                        color='none', edgecolor=cmap(.8))
+                                        color='none', edgecolor=tr.draw_color)
         _format_offset_hist_panel(hist_axs[row], xticks=hist_xticks)
 
         if hist_title == 'variance':
