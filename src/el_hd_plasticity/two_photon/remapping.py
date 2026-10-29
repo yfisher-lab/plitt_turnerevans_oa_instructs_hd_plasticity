@@ -389,15 +389,21 @@ class _Rows:
         return self._df.iterrows()
 
 
-def session_offset_summary(session_manager, scan_types=OFFSET_SCAN_TYPES):
+def session_offset_summary(session_manager, scan_types=OFFSET_SCAN_TYPES,
+                           meta_cols=('fly_id', 'condition', 'scan_type')):
     """Per-session offset summary of the scans without optogenetic stimulation.
 
+    Args:
+        scan_types: Scan types summarized.
+        meta_cols: Session-table columns copied to the result. Add one to carry it into
+            :func:`build_sum_stats` as an extra metric (e.g. ``'post_dark'``).
+
     Returns:
-        DataFrame with fly_id, condition, scan_type and the columns 'mean offset' (circular mean of the offset),
+        DataFrame with the `meta_cols` and the columns 'mean offset' (circular mean of the offset),
         'mean vec. len' and 'offset var.' used by :func:`build_sum_stats`.
     """
     rows = _Rows(session_manager, session_manager.sess_df['scan_type'].isin(scan_types))
-    summary = stats.add_offset_var(stats.offset_stats(rows, meta_cols=('fly_id', 'condition', 'scan_type')))
+    summary = stats.add_offset_var(stats.offset_stats(rows, meta_cols=meta_cols))
     return summary.drop(columns='offset_var_logit').rename(columns={
         'offset_mean': 'mean offset', 'offset_mag': 'mean vec. len', 'offset_var': 'offset var.'})
 
@@ -617,13 +623,14 @@ def plot_remap_error(figdir, sum_stats, groups, reference, filename='remapping_e
         Tuple of (figure, DataFrame of tests).
     """
     errors = {g.value: avg_diff(sum_stats[g.value]).dropna() for g in groups}
-    fig, ax = plt.subplots(figsize=[1.4 * len(groups) + .6, 3.5])
+    fig, ax = plt.subplots(figsize=[1.2 * len(groups) + .6, 3.5])
     for i, group in enumerate(groups):
         err = errors[group.value]
         ax.scatter(i + np.linspace(0, .1, num=len(err)), err, color=group.color, alpha=.3, s=80)
-        ax.plot([i - .05, i + .15], err.mean() * np.ones(2), color=group.color, linewidth=8)
+        ax.plot([i - .05, i + .15], err.median() * np.ones(2), color=group.color, linewidth=8)
     ax.axhline(np.pi / 2, color='k', linestyle='--', alpha=.5, zorder=-1)
     ax.set_xticks(np.arange(len(groups)) + .05, labels=[g.label for g in groups], fontsize=8)
+    ax.set_xlim([-.5, len(groups)-.5])
     ax.set_ylabel('Avg remapping error')
     ax.set_yticks([0, np.pi / 4, np.pi / 2, 3 * np.pi / 4, np.pi],
                   labels=[0, r'$\pi$/4', r'$\pi$/2', r'$3\pi$/4', r'$\pi$'])

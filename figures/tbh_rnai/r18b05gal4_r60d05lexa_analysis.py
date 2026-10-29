@@ -86,9 +86,9 @@ def width_analysis(sess_manager):
     return widths, {'bump_width_tests': nmp.group_comparison.width_tests(widths, GROUP_COL, GROUPS)}
 
 
-def plot_session_figures(sess_manager):
+def plot_session_figures(sess_manager, **kwargs):
     """Closed-loop and dark heatmaps with offset histograms of every fly."""
-    return nmp.group_comparison.plot_session_figures(sess_manager.fig_folder, sess_manager, min_closed_loop=MIN_CL)
+    return nmp.group_comparison.plot_session_figures(sess_manager.fig_folder, sess_manager, min_closed_loop=MIN_CL, **kwargs)
 
 
 def main(basedir=BASEDIR, figdir=DEFAULT_FIGDIR, session_figures=True):

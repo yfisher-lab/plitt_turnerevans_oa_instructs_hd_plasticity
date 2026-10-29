@@ -24,7 +24,7 @@ from el_hd_plasticity.two_photon.remapping import (
     plot_remap_error,
     plot_vec_len_comparison,
 )
-
+ 
 BASEDIR = pathlib.Path('/media/mplitt/SSD_storage/2P_scratch/R60D05LexA_jGCaMP7b_CsChrimsontdT_EL_hcKCR1')
 DEFAULT_FIGDIR = pathlib.Path('/media/mplitt/SSD_storage/fig_scratch/R60D05LexA_jGCaMP7b_CsChrimsontdT_EL_hcKCR1')
 

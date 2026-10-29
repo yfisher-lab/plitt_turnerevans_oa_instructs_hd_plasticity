@@ -68,8 +68,12 @@ def test_widths_and_tests(manager, tmp_path):
     widths = gc.compute_widths(manager, 'condition', closed_loop_blocks=(1, 2))
     assert {'cl_width', 'dark_width'} <= set(widths.columns) and len(widths) == manager.sess_df['fly_id'].nunique()
     gc.plot_widths(tmp_path, widths, 'condition', GROUPS)
+    gc.plot_width_change(tmp_path, widths, 'condition', GROUPS)
+    assert {'bump_width_dark_v_closed_loop.pdf', 'bump_width_change.pdf'} <= {p.name for p in tmp_path.iterdir()}
+    np.testing.assert_allclose(gc.width_change(widths), widths['cl_width'] - widths['dark_width'])
     tests = gc.width_tests(widths, 'condition', GROUPS)
-    assert list(tests['family']) == ['closed loop vs dark'] * 2 + ['closed loop, between groups']
+    assert list(tests['family']) == ['closed loop vs dark'] * 2 + ['closed loop, between groups',
+                                                                  'change (closed loop - dark), between groups']
     assert tests['p_holm'].notna().all()
 
 

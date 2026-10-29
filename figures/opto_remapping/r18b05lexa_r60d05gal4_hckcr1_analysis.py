@@ -31,7 +31,7 @@ GROUPS = [Group('exp', 'EL stim, EPG HcKCR1', plt.cm.Purples(.8)),
           Group('no_cschrimson', 'EPG HcKCR1', 'black')]
 REFERENCE = 'exp'  # group the other groups are compared with
 ZERO_GROUPS = ('no_cschrimson',)  # groups whose first post-cue offset is unwrapped toward baseline
-OPTO_ZSCORE = False
+OPTO_ZSCORE = True
 
 
 def load_session_manager(basedir=BASEDIR, figdir=DEFAULT_FIGDIR):
@@ -55,7 +55,7 @@ def opto_analysis(sess_manager):
     tables = {}
     return aligned, tables
 
-
+ 
 def offset_analysis(sess_manager):
     """Offset (bump-cue) remapping: vector lengths, offsets of every fly and the remapping error.
 
@@ -74,9 +74,9 @@ def offset_analysis(sess_manager):
     return summary, tables
 
 
-def plot_session_figures(sess_manager):
+def plot_session_figures(sess_manager, **kwargs):
     """Heatmaps with offset histograms and polar plots of the baseline and two post-cue scans of every fly."""
-    return nmp.remapping.plot_session_figures(sess_manager.fig_folder, sess_manager, GROUPS)
+    return nmp.remapping.plot_session_figures(sess_manager.fig_folder, sess_manager, GROUPS, **kwargs)
 
 
 def main(basedir=BASEDIR, figdir=DEFAULT_FIGDIR, session_figures=True):

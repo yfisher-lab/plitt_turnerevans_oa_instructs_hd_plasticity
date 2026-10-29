@@ -82,7 +82,7 @@ def paired_group_panels(figdir, df, group_col, groups, ycol, ylabel, ylim, filen
         The figure (saved as `filename` in `figdir`).
     """
     levels = levels or [(0, 'dark', DARK_COLOR), (1, 'closed loop', CL_COLOR)]
-    fig, axs = plt.subplots(1, len(groups), sharey=True, figsize=[2 * len(groups), 4], squeeze=False)
+    fig, axs = plt.subplots(1, len(groups), sharey=True, figsize=[(2.25) * len(groups), 4], squeeze=False)
     for ax, group in zip(axs[0], groups, strict=True):
         sel = df.loc[df[group_col] == group.value]
         plotting.paired_plot(ax, sel, xcol, levels, ycol, connect)
@@ -348,10 +348,52 @@ def plot_widths(figdir, widths, group_col, groups, ylims = None, filename='bump_
                                yticklabels=[r'$\pi$/2', r'$3\pi$/4', r'$\pi$'], connect=connect)
 
 
-def width_tests(widths, group_col, groups):
-    """Wilcoxon tests of closed loop vs dark within each group, and Mann-Whitney tests between groups in closed loop.
+def width_change(widths):
+    """Per-fly change in bump width between darkness and closed loop (closed loop minus dark), in radians."""
+    return widths['cl_width'] - widths['dark_width']
 
-    Both families are Holm-corrected separately.
+
+def plot_width_change(figdir, widths, group_col, groups, ylims=None, filename='bump_width_change.pdf'):
+    """Change in bump width between darkness and closed loop, the groups side by side.
+
+    One column of flies per group (jittered points and the group mean as a bar), in the style of the
+    remapping error of :func:`remapping.plot_remap_error`, so the groups are compared directly rather
+    than a panel apart as in :func:`plot_widths`.
+
+    Args:
+        widths: Per-fly widths from :func:`compute_widths`.
+        ylims: Limits of the change axis, in radians; -pi/2 to pi/4 if None. Flies outside them are
+            drawn off the axis.
+
+    Returns:
+        The figure (saved as `filename` in `figdir`).
+    """
+    change = widths.assign(width_change=width_change(widths))
+    fig, ax = plt.subplots(figsize=[2.25, 4])
+    for i, group in enumerate(groups):
+        sel = change.loc[change[group_col] == group.value]
+        ax.scatter(i + sel['fly_id'].map(utilities.fly_jitter(sel['fly_id'])), sel['width_change'],
+                   color=group.color, alpha=.5, s=80)
+        ax.plot([i - .15, i + .15], sel['width_change'].median() * np.ones(2), color=group.color, linewidth=8)
+    ax.axhline(0, color='k', linestyle='--', alpha=.5, zorder=-1)        # no change between the two conditions
+    ax.set_xticks(range(len(groups)),
+                  labels=[f'{g.label}\nn={(change[group_col] == g.value).sum()}' for g in groups], fontsize=8)
+    ax.set_xlim(-.5, len(groups) - .5)
+    ax.set_ylabel('bump FWHM change (rad)\nclosed loop - dark')
+    ax.set_yticks([-np.pi / 2, -np.pi / 4, 0, np.pi / 4],
+                  labels=[r'-$\pi$/2', r'-$\pi$/4', '0', r'$\pi$/4'])
+    ax.set_ylim((-np.pi / 2, np.pi / 4) if ylims is None else ylims)
+    plotting.despine(ax)
+    fig.tight_layout()
+    fig.savefig(_pdf(figdir, filename), format='pdf', bbox_inches='tight')
+    return fig
+
+
+def width_tests(widths, group_col, groups):
+    """Wilcoxon tests of closed loop vs dark within each group, and Mann-Whitney tests between groups of the
+    closed-loop width and of the change between the two conditions (:func:`width_change`).
+
+    Each family is Holm-corrected separately.
 
     Returns:
         DataFrame with one row per test.
@@ -360,11 +402,14 @@ def width_tests(widths, group_col, groups):
              **stats.wilcoxon_vs(widths.loc[widths[group_col] == g.value, 'cl_width'],
                                  widths.loc[widths[group_col] == g.value, 'dark_width'].to_numpy())}
             for g in groups]
-    for a, b in itertools.combinations(groups, 2):
-        u, p = sp.stats.mannwhitneyu(widths.loc[widths[group_col] == a.value, 'cl_width'],
-                                     widths.loc[widths[group_col] == b.value, 'cl_width'])
-        rows.append({'family': 'closed loop, between groups', 'comparison': f'{a.label} vs {b.label}',
-                     'W': float(u), 'p': float(p)})
+    change = widths.assign(width_change=width_change(widths))
+    for column, family in (('cl_width', 'closed loop, between groups'),
+                           ('width_change', 'change (closed loop - dark), between groups')):
+        for a, b in itertools.combinations(groups, 2):
+            u, p = sp.stats.mannwhitneyu(change.loc[change[group_col] == a.value, column],
+                                         change.loc[change[group_col] == b.value, column])
+            rows.append({'family': family, 'comparison': f'{a.label} vs {b.label}',
+                         'W': float(u), 'p': float(p)})
     tests = pd.DataFrame(rows)
     tests['p_holm'] = np.nan
     for _, sub in tests.groupby('family'):

@@ -33,7 +33,7 @@ GROUPS = [Group('remap', 'EL stim', 'green'),
           Group('novis_control', 'no visual cue', plt.cm.Greys(.6))]
 REFERENCE = 'remap'  # group the other groups are compared with
 ZERO_GROUPS = ('no_chrimson', 'novis_control')  # groups whose first post-cue offset is unwrapped toward baseline
-OPTO_ZSCORE = False
+OPTO_ZSCORE = True
 WINDOW = slice(7, 10)                           # ROIs around the stimulated position used for the response tests
 SESSION_GROUPS = GROUPS[:2]                     # groups with session figures (those shown a visual cue)
 
@@ -61,7 +61,7 @@ def opto_analysis(sess_manager):
     tables = {}
     tables['opto_window_tests'] = nmp.remapping.aligned_window_tests(aligned, GROUPS, REFERENCE, WINDOW)
     return aligned, tables
-
+ 
 
 def offset_analysis(sess_manager):
     """Offset (bump-cue) remapping: vector lengths, offsets of every fly and the remapping error.

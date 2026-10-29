@@ -265,9 +265,9 @@ def plot_pva_diff(sess_manager, offset_unique):
     ax.axhline(np.pi / 2, color='k', linestyle='--', label='chance', zorder=-1)
     ax.axhline(np.pi / 4, color='r', linestyle='--', label='1 glomerulus', zorder=-1)
 
-    ax.plot([-.05, .05], np.median(offset_unique.loc[offset_unique['cl']==0,'pva_diff'])*np.ones([2,]), color=plt.cm.Purples(.8), linewidth=8)
-    ax.plot([1-.05, 1+.05], np.median(offset_unique.loc[offset_unique['cl']==1, 'pva_diff'])*np.ones([2,]), color='black', linewidth=8)
-    ax.set_xlim([-.5,1.5])
+    ax.plot([-.1, .1], np.median(offset_unique.loc[offset_unique['cl']==0,'pva_diff'])*np.ones([2,]), color=plt.cm.Purples(.8), linewidth=8)
+    ax.plot([1-.1, 1+.1], np.median(offset_unique.loc[offset_unique['cl']==1, 'pva_diff'])*np.ones([2,]), color='black', linewidth=8)
+    ax.set_xlim([-.3,1.3])
     ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1.0), fontsize=8, frameon=False)
     fig.savefig(sess_manager.fig_folder / 'PVA_diff.pdf', bbox_inches='tight')
 

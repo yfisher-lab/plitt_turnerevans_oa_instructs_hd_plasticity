@@ -256,11 +256,12 @@ def plot_session_figures(sess_manager, close=True):
     for fly in sess_df['fly_id'].unique():
         fly_df = sess_df.loc[sess_df['fly_id'] == fly]
         epochs = {key: fly_df.loc[fly_df['closed_loop'] == cl] for key, cl in EPOCH_CLOSED_LOOP.items()}
+        
         if any(len(df) == 0 for df in epochs.values()):
             print(f'Skipping {fly}: missing closed loop 1, dark or closed loop 2')
             continue
 
-        ts_dict = {'fly': fly,
+        ts_dict = {'fly': fly,           
                    **{key: nmp.session.GetTS(sess_manager.load_row(df.iloc[0])) for key, df in epochs.items()}}
         fly_folder = session_folder / fly
         fly_folder.mkdir(parents=True, exist_ok=True)
