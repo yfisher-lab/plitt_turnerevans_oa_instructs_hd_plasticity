@@ -36,7 +36,7 @@ OPTO_ZSCORE = True                                    # as in the other CsChrims
 
 # The two cues of each fly, told apart by whether darkness preceded them.
 DARK_LABELS = {0: 'no dark', 1: 'after dark'}
-DARK_GROUPS = [Group('no dark', 'no dark', 'black'), Group('after dark', 'after dark', plt.cm.Purples(.8))]
+DARK_GROUPS = [Group('no dark', 'no dark', 'black'), Group('after dark', 'after dark', plt.cm.Greys(.7))]
 DARK_LEVELS = [(i, group.label, group.color) for i, group in enumerate(DARK_GROUPS)]   # x positions of the two
 
 # Flies split by which of the two cues followed the dark period.
