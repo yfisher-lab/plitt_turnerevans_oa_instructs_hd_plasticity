@@ -26,8 +26,8 @@ DH_BINS = np.linspace(0, 3.14, num=20)         # bins of absolute rotation speed
 RHO_MEAN_FROM_BIN = 3                          # per-fly mean PV magnitude uses the bins from this one on
 SCAN_TYPES = ('baseline', 'post_heat')
 SCAN_LABELS = {'baseline': '25°C', 'post_heat': '33°C'}
-BASELINE_COLOR = plt.cm.Greys(.5)
-HEAT_COLOR = 'black'
+BASELINE_COLOR = 'black'
+HEAT_COLOR = plt.cm.Greys(.5)
 CONDITIONS = {'gal4_only': 'Gal4-only control', 'exp': r'$\mathregular{shi^{TS}}$'}      # panel order and titles
 TWINDOW = (0, 180.1)                           # seconds of the session heatmaps
 

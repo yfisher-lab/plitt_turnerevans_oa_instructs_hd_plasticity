@@ -111,6 +111,25 @@ def phase_null(F):
     return F_centered, phase, np.abs(c1), rho, harmonic_ratio
 
 
+def phase_null_profiles(dff, rho_min=.05):
+    """Bump profile of every time point that has a bump, after nulling the first-harmonic phase.
+
+    Time points whose first-harmonic magnitude `rho` is at or below `rho_min` (no clear bump) are
+    dropped. Use this instead of :func:`mean_phase_null_profile` when the spread over time points is
+    needed as well as their mean.
+
+    Args:
+        dff: Array of shape (n_rois, n_timepoints).
+        rho_min: Minimum normalized first-harmonic magnitude for a time point to be included.
+
+    Returns:
+        Array of shape (n_included_timepoints, n_rois), each profile with its peak in the middle
+        (see :func:`phase_null`).
+    """
+    centered, _, _, rho, _ = phase_null(dff.T)
+    return centered[rho > rho_min]
+
+
 def mean_phase_null_profile(dff, rho_min=.05):
     """Time-averaged bump profile after nulling the first-harmonic phase of every time point.
 
@@ -124,8 +143,7 @@ def mean_phase_null_profile(dff, rho_min=.05):
     Returns:
         Array of shape (n_rois,) with the peak in the middle (see :func:`phase_null`).
     """
-    centered, _, _, rho, _ = phase_null(dff.T)
-    return centered[rho > rho_min].mean(axis=0)
+    return phase_null_profiles(dff, rho_min=rho_min).mean(axis=0)
 
 
 def shift_by_phase(arr, sortby_index):

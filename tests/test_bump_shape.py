@@ -78,6 +78,10 @@ def test_mean_phase_null_profile_centers_peak_and_ignores_weak_frames():
     assert prof.shape == (n,) and np.argmax(prof) == n // 2
     flat = np.concatenate([dff, np.ones((n, 5))], axis=1)       # frames with no bump
     assert np.allclose(ra.mean_phase_null_profile(flat), prof)
+    # the per-frame profiles are what that mean is taken over, and the bumpless frames are dropped there too
+    frames = ra.phase_null_profiles(flat)
+    assert frames.shape == (centers.size, n)
+    assert np.allclose(frames.mean(axis=0), prof)
 
 
 def test_shift_by_phase_centers_reference_channel_to_sub_roi_precision_and_keeps_relative_shift():

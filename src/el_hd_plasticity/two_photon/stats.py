@@ -278,6 +278,68 @@ def dphi_stats(session_manager, dh_bins, meta_cols=None, **ts_kwargs):
 
 
 # ----------------------------------------------------------------------------
+# Lag between the neural phase and behavior
+# ----------------------------------------------------------------------------
+DEFAULT_LAGS = np.arange(-10, 11) / 10      # seconds; the lag axis shared by sessions of different frame rates
+
+
+def lag_xcorr(ts, lags=DEFAULT_LAGS):
+    """Correlation of PVA angular velocity with heading angular velocity, the neural trace shifted in time.
+
+    The neural velocity is rolled by whole frames and the correlations are interpolated onto `lags`, so that
+    sessions sampled at different rates can be averaged on one lag axis. The lag of the largest correlation is
+    how far the phase trails the heading, and is negative when the neural signal lags the behavior -- it is the
+    quantity ``session.SessionTimeseries.from_session`` then corrects for with ``neural_shift``.
+
+    Args:
+        ts: Timeseries of one session, built with ``neural_shift=0`` (otherwise the lag that is already
+            corrected for is subtracted from the one measured here).
+        lags: Lags in seconds at which the correlation is reported.
+
+    Returns:
+        Array of correlation coefficients, one per lag.
+    """
+    dphi = np.diff(np.unwrap(ts.phi)) / ts.dt
+    dh = np.diff(np.unwrap(ts.heading_sm)) / ts.dt
+    frames = int(np.ceil(np.abs(lags).max() / ts.dt)) + 1              # enough whole frames to cover `lags`
+    shifts = np.arange(-frames, frames + 1)
+    corr = [np.corrcoef(np.roll(dphi, int(shift)), dh)[0, 1] for shift in shifts]
+    return np.interp(lags, shifts * ts.dt, corr)
+
+
+def lag_stats(session_manager, meta_cols=None, lags=DEFAULT_LAGS, **ts_kwargs):
+    """Correlation between PVA velocity and heading velocity at each lag, one row per session.
+
+    Args:
+        session_manager: Session manager object.
+        meta_cols: Session-table columns copied to the result under the same names.
+            Defaults to ``('fly_id', 'closed_loop')``.
+        lags: Lags in seconds (see :func:`lag_xcorr`).
+        **ts_kwargs: Passed to :meth:`session.SessionTimeseries.from_session`. ``neural_shift`` defaults to 0
+            here rather than to the correction that constructor usually applies, because the point of this
+            statistic is to measure that correction.
+
+    Returns:
+        DataFrame with the `meta_cols` plus ``xcorr``: array with one correlation per lag.
+    """
+    meta_cols = BASIC_META_COLS if meta_cols is None else meta_cols
+    ts_kwargs = {'neural_shift': 0, **ts_kwargs}
+    rows = []
+
+    for _, row in session_manager.iterrows():
+        ts = session.GetTS(session_manager.load_row(row), **ts_kwargs)
+        rows.append({**_meta(row, meta_cols), 'xcorr': lag_xcorr(ts, lags)})
+
+    return pd.DataFrame(rows)
+
+
+def peak_lag(xcorr, lags=DEFAULT_LAGS):
+    """Lag of the largest correlation of each row of `xcorr` (an array of lag curves, or a single one)."""
+    xcorr = np.atleast_2d(xcorr)
+    return np.asarray(lags)[np.nanargmax(xcorr, axis=-1)]
+
+
+# ----------------------------------------------------------------------------
 # Bump shape statistics
 # ----------------------------------------------------------------------------
 def bump_stats(session_manager, meta_cols=None, rho_min=.05, **ts_kwargs):

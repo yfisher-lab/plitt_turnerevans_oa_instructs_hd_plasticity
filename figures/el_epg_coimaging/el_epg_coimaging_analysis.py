@@ -109,14 +109,17 @@ PVA_DIFF_YTICK_LABELS = [r'-$\pi$/16', r'-$\pi$/32', '0', r'$\pi$/32', r'$\pi$/1
 
 
 def pva_diff_vs_speed_plot(grouped_pvd, bins, conditions=((1, CL_COLOR, 'closed loop'), (0, DARK_COLOR, 'dark')),
-                           ylim=(-np.pi / 16, np.pi / 16)):
+                           ylim=(-np.pi / 16, np.pi / 16), yticks=PVA_DIFF_YTICKS, yticklabels=PVA_DIFF_YTICK_LABELS):
     """Signed PVA difference (EL - EPG) against rotation speed, with the Spearman correlation per condition.
 
     Returns:
         Tuple of (figure, dict condition label -> Spearman result).
     """
-    fig, ax = binned_vs_speed_plot(grouped_pvd, 'pva_diff', bins, r'$\Delta$ PVA (EL - EPG)', PVA_DIFF_YTICKS,
-                                   PVA_DIFF_YTICK_LABELS, ylim, conditions)
+
+    
+    print(yticks, yticklabels)
+    fig, ax = binned_vs_speed_plot(grouped_pvd, 'pva_diff', bins, r'$\Delta$ PVA (EL - EPG)', yticks,
+                                   yticklabels, ylim, conditions)
     ax.axhline(0, color='k', linestyle='--', alpha=.5, zorder=-1)
     stats = {label: spearman_vs_speed(np.stack(grouped_pvd.loc[grouped_pvd['cl'] == cl, 'pva_diff']), bins)
              for cl, _, label in conditions}

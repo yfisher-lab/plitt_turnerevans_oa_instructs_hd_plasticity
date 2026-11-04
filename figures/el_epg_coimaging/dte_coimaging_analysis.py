@@ -185,7 +185,9 @@ def plot_rho_vs_speed(figdir, grouped, dh_bins=DH_BINS):
 def plot_pva_diff_vs_speed(figdir, grouped, dh_bins=DH_BINS):
     """Signed PVA difference (EL - EPG) against rotation speed (closed loop), with the Spearman correlation."""
     fig, stats = pva_diff_vs_speed_plot(grouped['pva_diff'], dh_bins, conditions=ONLY_CLOSED_LOOP,
-                                        ylim=(-np.pi / 16, 3 * np.pi / 32))
+                                        ylim=(-np.pi / 16, 5 * np.pi / 32),
+                                        yticks =[-np.pi / 16, 0, np.pi / 16, np.pi / 8],
+                                        yticklabels=[r'$-\pi/16$', r'$0$', r'$\pi/16$', r'$\pi/8$'])
     fig.tight_layout()
     fig.savefig(pathlib.Path(figdir) / 'PVA_diff_v_speed.pdf', format='pdf', bbox_inches='tight')
     return fig, stats

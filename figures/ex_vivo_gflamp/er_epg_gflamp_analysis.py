@@ -27,7 +27,7 @@ DEFAULT_FIGDIR = pathlib.Path('/media/mplitt/SSD_storage/fig_scratch/ex_vivo_gfl
 
 # groups compared within each cell type
 GROUPS = {
-    'ER': (Group('exp', 'ER GFlamp, EL CsChrimson', 'magenta'),
+    'ER': (Group('exp', 'ER GFlamp, EL CsChrimson', plt.cm.cool(.7)),
            Group('nocschr_control', 'ER GFlamp, EL no CsChrimson control', plt.cm.Greys(.6), '--', '//')),
     'EPG': (Group('exp', 'EPG GFlamp, EL CsChrimson', 'black'),
             Group('nocschr_control', 'EPG GFlamp, EL no CsChrimson control', plt.cm.Greys(.6), '--', '//')),

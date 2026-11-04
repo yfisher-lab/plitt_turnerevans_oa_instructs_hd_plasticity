@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import pingouin as pg
 import scipy as sp
+import seaborn as sns
 from matplotlib import pyplot as plt
 from statsmodels.formula.api import ols
 
@@ -353,12 +354,13 @@ def width_change(widths):
     return widths['cl_width'] - widths['dark_width']
 
 
-def plot_width_change(figdir, widths, group_col, groups, ylims=None, filename='bump_width_change.pdf'):
+def plot_width_change(figdir, widths, group_col, groups, ylims=None, filename='bump_width_change.pdf', height=4):
     """Change in bump width between darkness and closed loop, the groups side by side.
 
-    One column of flies per group (jittered points and the group mean as a bar), in the style of the
-    remapping error of :func:`remapping.plot_remap_error`, so the groups are compared directly rather
-    than a panel apart as in :func:`plot_widths`.
+    One column of flies per group (jittered points and the group median as a bar), so the groups are
+    compared directly rather than a panel apart as in :func:`plot_widths`. Drawn in the style of the
+    other per-fly summaries (:func:`plotting.paired_plot` and the offset change of the across-dark
+    analysis): one column's width per group, seaborn points and no bottom spine.
 
     Args:
         widths: Per-fly widths from :func:`compute_widths`.
@@ -369,22 +371,25 @@ def plot_width_change(figdir, widths, group_col, groups, ylims=None, filename='b
         The figure (saved as `filename` in `figdir`).
     """
     change = widths.assign(width_change=width_change(widths))
-    fig, ax = plt.subplots(figsize=[2.25, 4])
+    change['x'] = (change[group_col].map({g.value: i for i, g in enumerate(groups)})
+                   + change['fly_id'].map(utilities.fly_jitter(change['fly_id'], width=.02)))
+    fig, ax = plt.subplots(figsize=[1. * len(groups), height])
     for i, group in enumerate(groups):
         sel = change.loc[change[group_col] == group.value]
-        ax.scatter(i + sel['fly_id'].map(utilities.fly_jitter(sel['fly_id'])), sel['width_change'],
-                   color=group.color, alpha=.5, s=80)
-        ax.plot([i - .15, i + .15], sel['width_change'].median() * np.ones(2), color=group.color, linewidth=8)
-    ax.axhline(0, color='k', linestyle='--', alpha=.5, zorder=-1)        # no change between the two conditions
+        sns.scatterplot(data=sel, x='x', y='width_change', color=group.color, s=100, alpha=.4,
+                        legend=False, ax=ax)
+        ax.plot([i - .05, i + .05], sel['width_change'].median() * np.ones(2), color=group.color, linewidth=8)
+    ax.plot([-.1, len(groups) - .9], [0, 0], 'k--', alpha=.5, zorder=-1)   # no change between the two conditions
     ax.set_xticks(range(len(groups)),
                   labels=[f'{g.label}\nn={(change[group_col] == g.value).sum()}' for g in groups], fontsize=8)
-    ax.set_xlim(-.5, len(groups) - .5)
+    ax.set_xlabel('')
+    ax.set_xlim(-.15, len(groups) - 1 + .15)
     ax.set_ylabel('bump FWHM change (rad)\nclosed loop - dark')
     ax.set_yticks([-np.pi / 2, -np.pi / 4, 0, np.pi / 4],
                   labels=[r'-$\pi$/2', r'-$\pi$/4', '0', r'$\pi$/4'])
     ax.set_ylim((-np.pi / 2, np.pi / 4) if ylims is None else ylims)
-    plotting.despine(ax)
-    fig.tight_layout()
+    plotting.despine(ax, bottom=True)
+    # no tight_layout: one column per group is narrower than the two-line y label, which bbox_inches handles
     fig.savefig(_pdf(figdir, filename), format='pdf', bbox_inches='tight')
     return fig
 

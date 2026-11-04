@@ -47,6 +47,7 @@ class Trace:
         hatch: Hatch pattern; draws the offset histogram as an open, hatched outline instead of
             a filled one (used to mark a repeated condition).
         color: Color for histogram/polar plots; defaults to ``cmap(.8)``.
+        dh: Heading velocity in rad/s, length n_timepoints (only needed for the rotation-speed panel).
     """
     label: str
     dff: Any
@@ -58,6 +59,7 @@ class Trace:
     dff_aligned: Any = None
     hatch: str | None = None
     color: Any = None
+    dh: Any = None
 
     @classmethod
     def from_ts(cls, label, ts, cmap='Greys', channel=None, hatch=None, color=None):
@@ -74,7 +76,7 @@ class Trace:
         sel = (lambda a: a) if channel is None else (lambda a: a[channel])
         return cls(label=label, dff=sel(ts.dff), dff_aligned=sel(ts.dff_h_aligned), heading=ts.heading,
                    offset=sel(ts.offset), offset_c=sel(ts.offset_c), time=ts.time,
-                   cmap=cmap, hatch=hatch, color=color)
+                   cmap=cmap, hatch=hatch, color=color, dh=ts.dh)
 
     @property
     def draw_color(self):
@@ -198,10 +200,34 @@ def plot_heatmap_grid(traces, title, figsize, vmin=-.5, vmax=.5, plot_times=DEFA
     return fig, ax
 
 
+def _draw_behavior_panels(heatmap_ax, axs, tr, mask, time, plot_times):
+    """Heading and rotation speed of one trace, in two panels under its heatmap sharing its time axis."""
+    heading_ax, dh_ax = axs
+    x = np.arange(mask.sum())
+
+    heading_ax.scatter(x, tr.heading[mask] + np.pi, color='orange', s=2)
+    heading_ax.set_ylim([2 * np.pi, 0])                      # same orientation as the ROI axis above
+    heading_ax.set_yticks([0, np.pi, 2 * np.pi], labels=[r'0', r'$\pi$', r'$2\pi$'])
+    heading_ax.set_ylabel('Heading', fontsize=7)
+
+    dh_ax.plot(x, np.abs(tr.dh[mask]), color='black', linewidth=.8)
+    dh_ax.set_ylim([0, 10])
+    dh_ax.set_yticks([0, 10])
+    dh_ax.set_ylabel('rot speed', fontsize=7)
+
+    for ax in (heatmap_ax, heading_ax):                      # one shared time axis, labeled under the bottom panel
+        ax.set_xlabel('')
+        ax.tick_params(labelbottom=False)
+    format_time_axis(dh_ax, time, plot_times, 'x')
+    for ax in (heading_ax, dh_ax):
+        despine(ax)
+        ax.tick_params(labelsize=7)
+
+
 def plot_heatmaps_with_offset_hist(traces, title, figsize, vmin=-.5, vmax=3, plot_times=DEFAULT_PLOT_TIMES,
                                    twindow=None, bins=DEFAULT_OFFSET_BINS, slots=None, share_axes=False,
                                    hist_xticks=None, heatmap_titles=True, show_heading=True,
-                                   hist_title='vec_length', hist_xlim_zero=False):
+                                   hist_title='vec_length', hist_xlim_zero=False, show_behavior=False):
     """dF/F heatmaps (time on x) with the offset distribution beside each and a colorbar.
 
     Args:
@@ -222,17 +248,26 @@ def plot_heatmaps_with_offset_hist(traces, title, figsize, vmin=-.5, vmax=3, plo
         hist_title: Statistic shown above each histogram: 'vec_length' (mean offset vector length)
             or 'variance' (circular variance of the offset).
         hist_xlim_zero: Start the first histogram's x-axis at 0.
+        show_behavior: Put the heading and the rotation speed of each trace in their own panels under its
+            heatmap, sharing its time axis (the layout of :func:`grab_sensors.plot_sess_heatmaps`). The
+            traces then need ``dh``, and the figure needs roughly twice the height per row.
 
     Returns:
-        Tuple of (figure, (heatmap_axs, hist_axs, cbar_ax)).
+        Tuple of (figure, (heatmap_axs, hist_axs, cbar_ax)). The behavior panels are formatted here and
+        are not returned; they are the axes under each heatmap in ``fig.axes``.
     """
     n = len(traces)
     slots = range(n) if slots is None else slots
     fig = plt.figure(figsize=figsize)
     gs = GS(n, 4, figure=fig, width_ratios=[6, 1, .8, .2], wspace=.25, hspace=.8)
-    heatmap_axs = [fig.add_subplot(gs[0, 0])]
-    heatmap_axs.extend([fig.add_subplot(gs[i, 0], sharey=heatmap_axs[0] if share_axes else None)
-                        for i in range(1, n)])
+    heatmap_axs, behavior_axs = [], []
+    for i in range(n):
+        # the heatmap takes the whole cell, unless the behavior panels have to be stacked under it
+        cell = gs[i, 0].subgridspec(3, 1, height_ratios=[2.5, 1.4, 1.4], hspace=.15) if show_behavior else None
+        ax = fig.add_subplot(cell[0] if show_behavior else gs[i, 0],
+                             sharey=heatmap_axs[0] if (share_axes and i) else None)
+        heatmap_axs.append(ax)
+        behavior_axs.append(tuple(fig.add_subplot(cell[j], sharex=ax) for j in (1, 2)) if show_behavior else ())
     hist_axs = [fig.add_subplot(gs[0, 1])]
     hist_axs.extend([fig.add_subplot(gs[i, 1], sharex=hist_axs[0] if share_axes else None)
                      for i in range(1, n)])
@@ -254,6 +289,8 @@ def plot_heatmaps_with_offset_hist(traces, title, figsize, vmin=-.5, vmax=3, plo
         format_time_axis(heatmap_axs[row], time, plot_times, 'x')
         if heatmap_titles:
             heatmap_axs[row].set_title(tr.label)
+        if show_behavior:
+            _draw_behavior_panels(heatmap_axs[row], behavior_axs[row], tr, mask, time, plot_times)
 
         hist, centers = utilities.normalized_histogram(tr.offset, bins)
         if tr.hatch is None:
