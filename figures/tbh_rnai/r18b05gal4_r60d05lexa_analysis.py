@@ -28,7 +28,7 @@ GROUPS = [Group('control', 'UAS control', 'black'),
           Group('rnai_67968', 'TBH RNAi', 'green')]
 REFERENCE = 'rnai_67968'                          # baseline group of the PVA velocity regression
 MIN_CL = nmp.tbh_rnai.MIN_CL                      # closed-loop blocks of experience for a session to count as closed loop
-RHO_BINS = np.linspace(0, np.pi / 2, num=20)      # bins of absolute rotation speed (rad/s)
+RHO_BINS = np.linspace(0, np.pi, num=20)      # bins of absolute rotation speed (rad/s)
 DPHI_BINS = np.linspace(-2, 2, num=20)            # bins of signed rotation speed (rad/s)
 WIDTH_CL_BLOCKS = (2,)                            # closed-loop blocks used for the bump width
 
