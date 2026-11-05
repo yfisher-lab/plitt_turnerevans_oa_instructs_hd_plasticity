@@ -145,6 +145,7 @@ def add_offset_var(stats_df):
     stats_df = stats_df.copy()
     stats_df['offset_var'] = 1 - stats_df['offset_mag']
     stats_df['offset_var_logit'] = sp.special.logit(stats_df['offset_var'])
+    stats_df['offset_mag_logit'] = sp.special.logit(stats_df['offset_mag'])
     return stats_df
 
 

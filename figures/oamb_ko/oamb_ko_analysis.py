@@ -29,7 +29,7 @@ MIN_CL = nmp.oa_receptor_ko.MIN_CL                # closed-loop blocks of experi
 RHO_BINS = np.linspace(0, 3.14, num=20)           # bins of absolute rotation speed (rad/s)
 DPHI_BINS = np.linspace(-1, 1, num=20)            # bins of signed rotation speed (rad/s)
 WIDTH_CL_BLOCKS = (1,)                            # closed-loop blocks used for the bump width
-SESSION_TWINDOW = (0, 360.1)                      # seconds of the session heatmaps
+SESSION_TWINDOW = (0, 180.1)                      # seconds of the session heatmaps
 
 
 def load_session_manager(basedir=BASEDIR, figdir=DEFAULT_FIGDIR):

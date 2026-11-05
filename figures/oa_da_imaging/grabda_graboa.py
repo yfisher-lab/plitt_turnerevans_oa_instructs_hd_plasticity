@@ -107,14 +107,14 @@ def offset_var_tests(figdir, offset_unique):
           'data': offset_unique}
 
     fig, ax = plt.subplots(figsize=[4, 4])
-    pg.qqplot(offset_unique['offset_var_logit'], ax=ax)
-    fig.savefig(pathlib.Path(figdir) / 'offset_var_logit_qqplot.pdf', bbox_inches='tight')
+    pg.qqplot(offset_unique['offset_mag_logit'], ax=ax)
+    fig.savefig(pathlib.Path(figdir) / 'offset_mag_logit_qqplot.pdf', bbox_inches='tight')
 
     ttests = {}
     for name, dark in (('closed_loop', 0), ('dark', 1)):
         cond = offset_unique.loc[offset_unique['dark'] == dark]
-        ttest = sp.stats.ttest_ind(cond.loc[cond['group'] == 'DA', 'offset_var_logit'],
-                                   cond.loc[cond['group'] == 'OA', 'offset_var_logit'])
+        ttest = sp.stats.ttest_ind(cond.loc[cond['group'] == 'DA', 'offset_mag_logit'],
+                                   cond.loc[cond['group'] == 'OA', 'offset_mag_logit'])
         ttests[name] = {'condition': name, 't': ttest.statistic, 'p': ttest.pvalue, 'df': ttest.df}
     return {
         'offset_var_mixed_anova': pg.mixed_anova(**kw),

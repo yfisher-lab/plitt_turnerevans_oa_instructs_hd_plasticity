@@ -164,7 +164,7 @@ def plot_offset_stability(sess_manager, offset_stats):
     nmp.plotting.despine(ax, bottom=True)
     fig_change.savefig(sess_manager.fig_folder / 'dOffset_cl1_v_cl2.pdf', bbox_inches='tight')
 
-    return (fig_offsets, fig_change), {'n': len(diff), 'median_abs_change': float(np.median(diff))}
+    return (fig_offsets, fig_change), {'n': len(diff), 'median_abs_change': float(np.median(diff)), 'wilcoxon': nmp.stats.wilcoxon_vs(diff, np.pi/2)}
 
 
 # ----------------------------------------------------------------------------
@@ -378,7 +378,7 @@ def plot_bump_width(sess_manager, bump_grouped):
     figdir = sess_manager.fig_folder
     fig = nmp.group_comparison.plot_widths(figdir, widths, 'condition', GROUPS, ylims=(np.pi / 2, np.pi + .1))
     fig_change = nmp.group_comparison.plot_width_change(figdir, widths, 'condition', GROUPS, ylims=(-np.pi/4, np.pi/4), height=2)
-    return (fig, fig_change), nmp.stats.wilcoxon_vs(widths['cl_width'], widths['dark_width'].to_numpy())
+    return (fig, fig_change), nmp.stats.wilcoxon_vs(widths['cl_width'].to_numpy(), widths['dark_width'].to_numpy())
 
 
 # ----------------------------------------------------------------------------

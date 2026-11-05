@@ -132,10 +132,10 @@ def offset_var_tests(figdir, offset_unique, group_col):
     Returns:
         Dict of result tables.
     """
-    kw = {'dv': 'offset_var_logit', 'between': group_col, 'subject': 'fly_id', 'within': 'dark', 'data': offset_unique}
+    kw = {'dv': 'offset_mag_logit', 'between': group_col, 'subject': 'fly_id', 'within': 'dark', 'data': offset_unique}
     fig, ax = plt.subplots(figsize=[4, 4])
-    pg.qqplot(offset_unique['offset_var_logit'], ax=ax)
-    fig.savefig(_pdf(figdir, 'offset_var_logit_qqplot.pdf'), bbox_inches='tight')
+    pg.qqplot(offset_unique['offset_mag_logit'], ax=ax)
+    fig.savefig(_pdf(figdir, 'offset_mag_logit_qqplot.pdf'), bbox_inches='tight')
     plt.close(fig)
     return {
         'offset_var_mixed_anova': pg.mixed_anova(**kw),
