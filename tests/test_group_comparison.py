@@ -59,9 +59,16 @@ def test_binned_plot_and_mean_tests(manager, tmp_path):
 def test_dphi_regression_tests_cover_both_conditions(manager):
     grouped = gc.compute_binned_stats(manager, 'condition', 'dphi', SIGNED_BINS)
     out = gc.dphi_regression_tests(grouped, 'condition', GROUPS, 'a', SIGNED_BINS)
-    assert set(out['dphi_wald_tests']['condition']) == {'closed_loop', 'dark'}
-    assert len(out['dphi_wald_tests']) == 4 and len(out['dphi_coefficients']) == 2
-    assert 'dphi_ols_closed_loop' in out and 'dphi_ols_dark' in out
+    wald = out['dphi_wald_tests']
+    # one slope test and one intercept test, each spanning both conditions rather than one per condition
+    assert len(wald) == len(gc.DPHI_TERM_FAMILIES) == 2
+    assert list(wald['df']) == [2, 2]              # one non-reference group x (closed-loop term, dark term)
+    assert 'condition' not in wald.columns
+    group_term = 'C(condition, Treatment("a"))[T.b]'       # the one non-reference group
+    assert list(out['dphi_coefficients']['term']) == [f'dh:{group_term}', f'dh:{group_term}:C(dark)[T.1]']
+    assert 'p_holm' in out['dphi_coefficients']
+    # one model over both conditions, with the condition in it
+    assert 'C(dark)' in out['dphi_mixedlm'] and 'Group Var' in out['dphi_mixedlm']
 
 
 def test_widths_and_tests(manager, tmp_path):

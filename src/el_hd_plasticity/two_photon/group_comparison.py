@@ -21,7 +21,7 @@ import pingouin as pg
 import scipy as sp
 import seaborn as sns
 from matplotlib import pyplot as plt
-from statsmodels.formula.api import ols
+from statsmodels.formula.api import mixedlm
 
 from . import bump_shape, plotting, session, stats, tbh_rnai, utilities
 
@@ -277,38 +277,67 @@ def rho_regression_tests(figdir, grouped, group_col, bins):
     }
 
 
-def dphi_regression_tests(grouped, group_col, groups, reference, bins):
-    """Does the slope of PVA velocity against rotation speed differ between groups?
+# the two families of model terms Wald-tested together, each over both conditions at once; '{g}' is filled in
+# with each non-reference group, so a family holds that group's closed-loop term and its change in darkness
+DPHI_TERM_FAMILIES = (
+    ('slope differences between groups (dh:group)', ('dh:{g}', 'dh:{g}:C(dark)[T.1]')),
+    ('intercept differences between groups (group)', ('{g}', '{g}:C(dark)[T.1]')),
+)
+DPHI_SLOPE_TERMS = DPHI_TERM_FAMILIES[0][1]
 
-    Fits ``dphi ~ dh * group`` (OLS, `reference` group as baseline) separately in closed loop and in the dark,
-    and Wald-tests all slope differences (``dh:group``) and all intercept differences (``group``) together. The
-    slope differences of the individual groups are also Holm-corrected.
+
+def dphi_regression_tests(grouped, group_col, groups, reference, bins, re_formula='~dh'):
+    """Does the slope of PVA velocity against rotation speed differ between groups, and in darkness?
+
+    Fits ``dphi ~ dh * group * C(dark)`` to the closed-loop and dark data together as a mixed effects model
+    (``statsmodels`` MixedLM) with `re_formula` as the per-fly random effect, so a fly's two conditions and its
+    many speed bins are not treated as independent observations. The `reference` group and closed loop are the
+    baseline, so ``dh`` is the reference group's closed-loop slope and every other term is a difference from it.
+
+    Two Wald tests are reported (chi-square, one degree of freedom per term), each spanning both conditions:
+    one of every between-group slope term (``dh:group`` and ``dh:group:dark``) and one of every between-group
+    intercept term (``group`` and ``group:dark``). The conditions are not tested separately, so a group
+    difference in either of them, or a difference in how darkness changes a group, counts towards the same
+    test. The effects of darkness itself stay in the model as the ``dark`` terms of the summary. The
+    individual slope terms are also reported, Holm-corrected together.
 
     Args:
         reference: Value of the group column used as the baseline of the model.
+        re_formula: Random effect per fly; ``'~dh'`` (random intercept and slope) by default, ``None`` for a
+            random intercept only.
 
     Returns:
-        Dict with a 'dphi_wald_tests' table, a 'dphi_coefficients' table, and one 'dphi_ols_<condition>' summary text
-        per condition.
+        Dict with a 'dphi_wald_tests' table, a 'dphi_coefficients' table and the model summary as
+        'dphi_mixedlm'.
     """
-    reg = stats.reformat_binned_stats_for_reg(grouped, bins, {'dphi': 'dphi_dig'}, meta_cols=('fly_id', group_col, 'dark'))
+    reg = stats.reformat_binned_stats_for_reg(grouped, bins, {'dphi': 'dphi_dig'},
+                                              meta_cols=('fly_id', group_col, 'dark'))
+    reg['dark'] = (reg['dark'] > 0).astype(int)        # dark sessions are labelled >= 1 in some session tables
     term = f'C({group_col}, Treatment("{reference}"))'
     others = [g.value for g in groups if g.value != reference]
-    wald, coefficients, out = [], [], {}
-    for dark, condition in ((0, 'closed_loop'), (1, 'dark')):
-        result = ols(f'dphi ~ dh*{term}', reg.loc[reg['dark'] == dark]).fit()
-        out[f'dphi_ols_{condition}'] = str(result.summary())
-        for name, terms in (('slope differences (dh:group)', [f'dh:{term}[T.{v}]' for v in others]),
-                            ('intercept differences (group)', [f'{term}[T.{v}]' for v in others])):
-            test = result.wald_test(', '.join(f'({t} = 0)' for t in terms), scalar=True)
-            wald.append({'condition': condition, 'terms': name, 'F': float(test.statistic), 'p': float(test.pvalue)})
-        slopes = pd.DataFrame({'condition': condition, 'term': [f'dh:{term}[T.{v}]' for v in others]})
-        slopes['coef'] = [result.params[t] for t in slopes['term']]
-        slopes['p'] = [result.pvalues[t] for t in slopes['term']]
-        coefficients.append(stats.add_holm(slopes))
-    out['dphi_wald_tests'] = pd.DataFrame(wald)
-    out['dphi_coefficients'] = pd.concat(coefficients, ignore_index=True)
-    return out
+    result = mixedlm(f'dphi ~ dh*{term}*C(dark)', reg, groups=reg['fly_id'], re_formula=re_formula).fit()
+
+    def model_terms(templates):
+        """The model's parameter names matching `templates`, one per template and non-reference group."""
+        names = [template.format(g=f'{term}[T.{value}]') for template in templates for value in others]
+        missing = [name for name in names if name not in result.params.index]
+        if missing:                                    # patsy renamed something; fail loudly rather than skip a test
+            raise KeyError(f'the model has no term(s) {missing}; its parameters are {list(result.params.index)}')
+        return names
+
+    wald = []
+    for family, templates in DPHI_TERM_FAMILIES:
+        tested = model_terms(templates)
+        test = result.wald_test(', '.join(f'({name} = 0)' for name in tested), scalar=True)
+        wald.append({'terms': family, 'chi2': float(test.statistic), 'df': len(tested), 'p': float(test.pvalue)})
+
+    slopes = pd.DataFrame({'term': model_terms(DPHI_SLOPE_TERMS)})
+    slopes['coef'] = [result.params[name] for name in slopes['term']]
+    slopes['p'] = [result.pvalues[name] for name in slopes['term']]
+
+    return {'dphi_wald_tests': pd.DataFrame(wald),
+            'dphi_coefficients': stats.add_holm(slopes),
+            'dphi_mixedlm': str(result.summary())}
 
 
 # ----------------------------------------------------------------------------

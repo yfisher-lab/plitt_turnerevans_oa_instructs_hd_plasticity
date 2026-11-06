@@ -76,7 +76,7 @@ def plot_max_dff(figdir, responses, groups=GROUPS, ylim=MAX_DFF_YLIM):
               'hue': 'condition', 'hue_order': [g.value for g in cell_groups],
               'palette': {g.value: g.color for g in cell_groups}}
         sns.stripplot(**kw, ax=ax, alpha=.5, dodge=True, s=8, legend=False)
-        sns.pointplot(**kw, ax=ax, estimator=np.mean, errorbar=None, marker='_', markersize=20,
+        sns.pointplot(**kw, ax=ax, estimator=np.median, errorbar=None, marker='_', markersize=20,
                       markeredgewidth=6, dodge=.4, linestyle='none', legend=False)
     ax.set_xlabel('')
     ax.set_ylabel('peak dF/F')

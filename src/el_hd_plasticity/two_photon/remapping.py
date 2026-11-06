@@ -144,7 +144,7 @@ def get_mu_sem(opto_resp_al, condition, scan_type):
 
 # ----------------------------------------------------------------------------
 # Per-fly offset summaries
-# ----------------------------------------------------------------------------
+#  ----------------------------------------------------------------------------
 def build_sum_stats(df, fly_list, conditions=None, scan_types=None, extra_metrics=()):
     """Average the per-scan offset summaries of each fly, one column per scan type and statistic.
 
@@ -641,11 +641,22 @@ def plot_remap_error(figdir, sum_stats, groups, reference, filename='remapping_e
     rows = [{'family': 'error vs chance', 'comparison': g.label, 'n': len(errors[g.value]),
              **{k: v for k, v in stats.wilcoxon_vs(errors[g.value], np.pi / 2).items() if k != 'n'}} for g in groups]
     ref_label = next(g.label for g in groups if g.value == reference)
+    tests = []
     for group in groups:
-        if group.value != reference:
-            u, p = sp.stats.mannwhitneyu(errors[reference], errors[group.value])
-            rows.append({'family': 'error between groups', 'comparison': f'{ref_label} vs {group.label}',
-                         'W': float(u), 'p': float(p)})
+        for group2 in groups[1:]:
+            # if group.value != group2.value: #reference:
+            if (group, group2) in tests or (group2, group) in tests or group.value == group2.value:
+                continue
+            tests.append((group, group2))
+
+            u, p = sp.stats.mannwhitneyu(errors[group.value], errors[group2.value])
+            rows.append({'family': 'error between groups', 'comparison': f'{group.label} vs {group2.label}',
+                        'W': float(u), 'p': float(p)})
+
+    if len(groups)>2:
+        h, p = sp.stats.kruskal(*[errors[g.value] for g in groups])
+        rows.append({'family': 'kruskal', 'comparison': 'all groups kruskal wallis', 'H': float(h), 'p': float(p)})
+
     tests = pd.DataFrame(rows)
     tests['p_holm'] = np.nan
     for _, sub in tests.groupby('family'):
