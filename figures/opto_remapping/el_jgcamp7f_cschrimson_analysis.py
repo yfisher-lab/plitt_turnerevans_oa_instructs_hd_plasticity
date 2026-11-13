@@ -77,6 +77,20 @@ def plot_session_figures(sess_manager):
     return nmp.remapping.plot_session_figures(sess_manager.fig_folder, sess_manager, GROUPS)
 
 
+def plot_pairing_scans(sess_manager, close=True):
+    """Heatmap of the remap_0deg and remap_180deg (pairing) scans of every fly, with the VR angle and the stimulated
+    wedge of each pairing (:func:`el_hd_plasticity.two_photon.remapping.plot_pairing_scans`).
+
+    The table of how many of the programmed pairings each scan recorded is saved as ``<fig_folder>/stats/pairing_scans.csv``.
+
+    Returns:
+        DataFrame with one row per pairing scan.
+    """
+    summary = nmp.remapping.plot_pairing_scans(sess_manager.fig_folder, sess_manager, GROUPS, close=close)
+    nmp.utilities.save_tables({'pairing_scans': summary}, sess_manager.fig_folder)
+    return summary
+
+
 def main(basedir=BASEDIR, figdir=DEFAULT_FIGDIR, session_figures=True):
     """Generate all figures and write the statistics tables to ``<figdir>/stats``."""
     plt.rcParams['pdf.fonttype'] = 42

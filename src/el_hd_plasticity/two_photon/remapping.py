@@ -19,7 +19,7 @@ import scipy as sp
 import seaborn as sns
 from matplotlib import pyplot as plt
 
-from . import plotting, session, stats
+from . import plotting, session, stats, utilities
 from .utilities import (
     DEFAULT_OFFSET_BINS,
     DEFAULT_PLOT_TIMES,
@@ -42,6 +42,44 @@ SCAN_CMAPS = {'baseline': 'Greys', 'post_0deg': 'PuRd', 'post_180deg': 'GnBu'}
 # ----------------------------------------------------------------------------
 # Optogenetic responses
 # ----------------------------------------------------------------------------
+def opto_onsets(pp):
+    """Frame indices of the optogenetic stimulations of a scan: rising edges of the opto trigger (> 1000)."""
+    trigger = pp.voltage_recording_aligned[' Opto Trigger'].to_numpy()
+    return np.flatnonzero(np.concatenate([[0], np.diff((trigger > 1000).astype(int)) > 0]))
+
+
+def masked_pairing_activity(pp):
+    """Z-scored dF/F of a pairing scan with the frames of every stimulation, and the first 2 s, masked.
+
+    The frames recorded during each stimulation (its mark-points ``duration``) are set to NaN before dF/F is
+    computed, without exponential detrending, so only the imaging between stimulations remains.
+
+    NOTE: the masked frames are set to NaN in ``pp.timeseries['rois']`` in place.
+
+    Returns:
+        Tuple of (stimulation onset frames, frames per stimulation, dF/F of the last channel (n_rois, n_frames)).
+    """
+    onsets = opto_onsets(pp)
+    volume_dt = np.diff(np.array(pp.metadata['frame_times']), axis=0)[0, 0]
+    n_frames = int(pp.metadata['mark_points']['duration'] / 1000 / volume_dt)
+    for ind in onsets:
+        pp.timeseries['rois'][:, :, ind:ind + n_frames] = np.nan
+    pp.timeseries['rois'][:, :, :int(2 / volume_dt)] = np.nan
+    dff = pp.calculate_zscored_F('rois', exp_detrend=False, zscore=True, background_ts='background')[-1, :, :]
+    return onsets, n_frames, dff
+
+
+def programmed_stimulations(pp):
+    """Number of stimulations the scan's mark-points protocol was set up to deliver.
+
+    Stimulation points that occur only once in the point list are placeholders (an unrepeated, zero-power first point)
+    and are not counted.
+    """
+    points = [int(point['Index']) for point in np.atleast_1d(pp.metadata['mark_points']['points_list'])]
+    counts = {index: points.count(index) for index in set(points)}
+    return sum(count for count in counts.values() if count > 1)
+
+
 def get_opto_resp(pp, zscore=False):
     """Extract per-ROI optogenetic responses aligned to stimulus offsets.
 
@@ -60,24 +98,8 @@ def get_opto_resp(pp, zscore=False):
     Returns:
         opto_resp: ndarray shaped (n_rois, n_points, n_reps) containing mean responses.
     """
-    opto_trig = pp.voltage_recording_aligned[' Opto Trigger']
-
-    # find rising edges of opto trigger (>1000 indicates trigger)
-    opto_trig_bool = np.concatenate([[0], np.diff((opto_trig > 1000).astype(int)) > 0])
-    opto_inds = np.flatnonzero(opto_trig_bool)
-
-    # frame timing and offset calculation
-    volume_dt = np.diff(np.array(pp.metadata['frame_times']), axis=0)[0, 0]
-    n_frames = int(pp.metadata['mark_points']['duration'] / 1000 / volume_dt)
+    opto_inds, n_frames, dff = masked_pairing_activity(pp)
     opto_off_inds = opto_inds + n_frames - 1
-
-    # mask data around opto onsets (avoid contamination) and initial frames
-    for ind in opto_inds:
-        pp.timeseries['rois'][:, :, ind:ind + n_frames] = np.nan
-    pp.timeseries['rois'][:, :, :int(2 / volume_dt)] = np.nan
-
-    # compute z-scored dF/F for ROIs (last returned array assumed to be per-frame)
-    dff = pp.calculate_zscored_F('rois', exp_detrend=False, zscore=True, background_ts='background')[-1, :, :]
 
     # expected grid of points x reps (hard-coded in upstream pipeline)
     n_rois = dff.shape[0]
@@ -662,6 +684,89 @@ def plot_remap_error(figdir, sum_stats, groups, reference, filename='remapping_e
     for _, sub in tests.groupby('family'):
         tests.loc[sub.index, 'p_holm'] = stats.add_holm(sub.copy())['p_holm']
     return fig, tests
+
+
+PAIRING_CMAPS = {'remap_0deg': 'PuRd', 'remap_180deg': 'GnBu'}
+
+
+def stimulated_roi(k):
+    """ROI stimulated at the `k`-th pairing (0-based), as :func:`align_opto_responses` places it."""
+    return (16 - 2 * (k % N_STIM_POINTS)) % 16
+
+
+def plot_pairing_heatmaps(fly, scans, vmin=-.5, vmax=3):
+    """Heatmap of each pairing scan of a fly, with the VR angle and the stimulated wedge of every pairing.
+
+    Args:
+        fly: Title of the figure.
+        scans: List of (scan type, session name, preprocessed session), in the order to draw them.
+
+    Returns:
+        Tuple of (figure, list of dicts summarizing each scan: scan_type, session, pairings recorded and programmed,
+        complete, duration_s).
+    """
+    fig, axs = plt.subplots(len(scans), 1, figsize=[13, 3.2 * len(scans)], squeeze=False)
+    summary = []
+    for ax, (scan_type, session_name, pp) in zip(axs[:, 0], scans, strict=True):
+        programmed = programmed_stimulations(pp)
+        onsets, n_frames, dff = masked_pairing_activity(pp)
+        voltage = pp.voltage_recording_aligned
+        time = (voltage['Time(ms)'].to_numpy() - voltage['Time(ms)'].iloc[0]) / 1000
+        heading = np.angle(np.exp(1j * (-voltage[' Heading'].to_numpy() - np.pi)))     # as session.GetTS does
+        dt = np.diff(time).mean()
+
+        cmap = plt.get_cmap(PAIRING_CMAPS.get(scan_type, 'Greys')).copy()
+        cmap.set_bad('white')                                       # the masked stimulation frames
+        h = ax.imshow(dff, aspect='auto', cmap=cmap, vmin=vmin, vmax=vmax, interpolation='none',
+                      extent=(time[0] - dt / 2, time[-1] + dt / 2, dff.shape[0] - .5, -.5))
+        fig.colorbar(h, ax=ax, pad=.01, label='z-scored F')
+        ax.scatter(time, utilities.heading_to_roi_coords(heading, dff.shape[0]), color='orange', s=2, zorder=2)
+        stim_mid = time[np.minimum(onsets + n_frames // 2, len(time) - 1)]
+        ax.scatter(stim_mid, [stimulated_roi(k) for k in range(len(onsets))], marker='o', s=40, facecolor='none',
+                   edgecolor='red', linewidth=1.5, zorder=3)
+        ax.set_ylim(dff.shape[0] - .5, -.5)
+        plotting.format_roi_axis(ax, 'y')
+        ax.set_xlabel('Time (s)')
+        complete = len(onsets) >= programmed
+        ax.set_title(f'{scan_type} ({session_name}): {len(onsets)} of {programmed} pairings recorded, '
+                     f'{time[-1]:.0f} s' + ('' if complete else '  -- INCOMPLETE'), fontsize=11,
+                     color='black' if complete else 'red')
+        summary.append({'scan_type': scan_type, 'session': session_name, 'pairings_recorded': len(onsets),
+                        'pairings_programmed': programmed, 'complete': complete, 'duration_s': float(time[-1])})
+    axs[-1, 0].plot([], [], 'o', color='orange', markersize=3, label='VR angle')
+    axs[-1, 0].plot([], [], 'o', markerfacecolor='none', markeredgecolor='red', label='stimulated wedge')
+    axs[-1, 0].legend(loc='upper right', bbox_to_anchor=(1., -.25), ncol=2, frameon=False, fontsize=9)
+    fig.suptitle(fly)
+    fig.tight_layout()
+    return fig, summary
+
+
+def plot_pairing_scans(figdir, session_manager, groups, scan_types=OPTO_SCANS, vmin=-.5, vmax=3, close=True):
+    """Pairing-scan heatmaps of every fly (:func:`plot_pairing_heatmaps`), to see which scans are complete.
+
+    Scans are drawn in the order in which they were acquired (the last three digits of the session name). Figures go to
+    ``<figdir>/sessions/<fly_id>/pairing_heatmaps.pdf``.
+
+    Returns:
+        DataFrame with one row per pairing scan: fly_id, condition, scan_type, session, pairings recorded and
+        programmed, complete and duration_s.
+    """
+    sess_df = session_manager.sess_df
+    sess_df = sess_df.loc[sess_df['condition'].isin([g.value for g in groups]) & sess_df['scan_type'].isin(scan_types)]
+    rows = []
+    for fly in sess_df['fly_id'].unique():
+        fly_df = sess_df.loc[sess_df['fly_id'] == fly]
+        fly_df = fly_df.iloc[np.argsort([int(name[-3:]) for name in fly_df['session']])]
+        scans = [(row['scan_type'], row['session'], session_manager.load_row(row)) for _, row in fly_df.iterrows()]
+        fig, summary = plot_pairing_heatmaps(fly, scans, vmin=vmin, vmax=vmax)
+        folder = pathlib.Path(figdir) / 'sessions' / fly
+        folder.mkdir(parents=True, exist_ok=True)
+        fig.savefig(folder / 'pairing_heatmaps.pdf', bbox_inches='tight')
+        condition = fly_df['condition'].iloc[0]
+        rows += [{'fly_id': fly, 'condition': condition, **row} for row in summary]
+        if close:
+            plt.close(fig)
+    return pd.DataFrame(rows)
 
 
 def plot_session_figures(figdir, session_manager, groups, vmin=-.5, vmax=3, close=True):

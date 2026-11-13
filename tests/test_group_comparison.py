@@ -56,13 +56,37 @@ def test_binned_plot_and_mean_tests(manager, tmp_path):
     assert np.isclose(tests['p'].iloc[0], expected)
 
 
+def test_rho_regression_tests_run_a_mixed_anova_per_condition(manager, tmp_path):
+    grouped = gc.compute_binned_stats(manager, 'condition', 'rho', BINS)
+    out = gc.rho_regression_tests(tmp_path, grouped, 'condition', BINS)
+    for condition in ('closed_loop', 'dark'):
+        anova = out[f'log_rho_mixed_anova_{condition}']
+        assert list(anova['Source']) == ['condition', 'dh', 'Interaction']
+    assert {'log_rho_qqplot.pdf', 'log_rho_qqplots_by_bin.pdf'} <= {f.name for f in tmp_path.iterdir()}
+
+
+def test_complete_bins_keeps_every_fly_and_drops_partial_bins(manager):
+    grouped = gc.compute_binned_stats(manager, 'condition', 'rho', BINS)
+    reg = tp.stats.reformat_binned_stats_for_reg(grouped, BINS, {'rho': 'rho_dig'},
+                                                 meta_cols=('fly_id', 'condition', 'dark'))
+    reg['log_rho'] = np.log(reg['rho'] + 1e-6)
+    kept = gc.complete_bins(reg)
+    assert kept['fly_id'].nunique() == reg['fly_id'].nunique()        # flies are never dropped, bins are
+    assert set(kept['dh']) <= set(reg['dh'])
+    # every surviving bin has a row for every fly, which is what pg.mixed_anova needs
+    assert (kept.groupby('dh')['fly_id'].nunique() == kept['fly_id'].nunique()).all()
+
+
 def test_dphi_regression_tests_cover_both_conditions(manager):
     grouped = gc.compute_binned_stats(manager, 'condition', 'dphi', SIGNED_BINS)
     out = gc.dphi_regression_tests(grouped, 'condition', GROUPS, 'a', SIGNED_BINS)
     wald = out['dphi_wald_tests']
     # one slope test and one intercept test, each spanning both conditions rather than one per condition
     assert len(wald) == len(gc.DPHI_TERM_FAMILIES) == 2
-    assert list(wald['df']) == [2, 2]              # one non-reference group x (closed-loop term, dark term)
+    assert list(wald['df_num']) == [2, 2]          # one non-reference group x (closed-loop term, dark term)
+    # F tests, with the model's residual df (one per row, minus the 8 fixed effects) as the denominator
+    assert list(wald.columns) == ['terms', 'F', 'df_num', 'df_denom', 'p']
+    assert wald['df_denom'].nunique() == 1 and wald['df_denom'].iloc[0] > wald['df_num'].max()
     assert 'condition' not in wald.columns
     group_term = 'C(condition, Treatment("a"))[T.b]'       # the one non-reference group
     assert list(out['dphi_coefficients']['term']) == [f'dh:{group_term}', f'dh:{group_term}:C(dark)[T.1]']

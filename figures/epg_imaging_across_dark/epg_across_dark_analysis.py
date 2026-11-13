@@ -428,6 +428,89 @@ def plot_session_figures(sess_manager, close=True):
 
 
 # ----------------------------------------------------------------------------
+# Supplemental movie
+# ----------------------------------------------------------------------------
+MOVIE_FLY = '04_02_2025_fly5_condition_control'
+MOVIE_SPEED = 5.                            # session seconds per movie second
+MOVIE_WINDOW = 180.                         # s of session the heatmap fills before it starts to scroll
+# fly and VR-rig schematics cut from the Figure 1 artwork by figures/movie_assets/make_movie_assets.py
+MOVIE_ASSETS = pathlib.Path(__file__).resolve().parent.parent / 'movie_assets'
+
+
+def make_session_movie(sess_manager, fly_id=MOVIE_FLY, closed_loop=1, speed=MOVIE_SPEED, window=MOVIE_WINDOW,
+                       outfile=None, snapshot_times=None, **kwargs):
+    """Explanatory movie of one closed-loop session (see :mod:`el_hd_plasticity.two_photon.session_movie`).
+
+    The session is loaded exactly as for the session heatmaps (default :func:`session.GetTS` settings, including the
+    -200 ms neural shift) and drawn with their colormap and color limits, so the movie's heatmap is the paper's.
+
+    Args:
+        fly_id, closed_loop: Which session; ``closed_loop=1`` is the first closed-loop block.
+        speed: Session seconds per movie second.
+        window: Seconds of session the heatmap fills before it starts to scroll.
+        outfile: MP4 path; ``<fig_folder>/movies/<fly_id>_closed_loop_<closed_loop>.mp4`` by default.
+        snapshot_times: If given, save PNG frames at these session times (s) next to `outfile` instead of the
+            movie, to check the layout quickly.
+        **kwargs: Passed to :class:`session_movie.ClosedLoopMovie`.
+
+    Returns:
+        Path of the movie, or the list of snapshot paths.
+    """
+    df = sess_manager.sess_df
+    rows = df.loc[(df['fly_id'] == fly_id) & (df['closed_loop'] == closed_loop)]
+    if rows.empty:
+        raise ValueError(f'no usable session of {fly_id} with closed_loop == {closed_loop}')
+    if outfile is None:
+        outfile = sess_manager.fig_folder / 'movies' / f'{fly_id}_closed_loop_{closed_loop}.mp4'
+    return nmp.session_movie.movie_from_session(
+        sess_manager, rows.iloc[0], outfile, snapshot_times=snapshot_times, speed=speed, window=window,
+        cmap='Greys', vmin=-.5, vmax=2.5, fly_image=MOVIE_ASSETS / 'fly_topdown.png',
+        rig_image=MOVIE_ASSETS / 'vr_rig.png', **kwargs)
+
+
+# the three sessions of the across-dark movie, in order: clock label, closed_loop value, heatmap colormap and offset
+# histogram as in the session figures (epg_across_dark.plot_sess_heatmaps_w_hist), and whether the cue was shown
+MOVIE_SESSIONS = (
+    ('closed loop 1', 1, nmp.session_movie.ColorEpoch(0., 'Greys', 'black', .5), True),
+    ('dark', 0, nmp.session_movie.ColorEpoch(0., 'Purples', plt.cm.Purples(.8), .5), False),
+    ('closed loop 2', 2, nmp.session_movie.ColorEpoch(0., 'Greys', 'black', 1., '/'), True),
+)
+MOVIE_GAP = 15.                             # s of experiment between consecutive sessions in the movie
+
+
+def make_across_dark_movie(sess_manager, fly_id=MOVIE_FLY, gap_s=MOVIE_GAP, speed=MOVIE_SPEED, window=MOVIE_WINDOW,
+                           outfile=None, snapshot_times=None, **kwargs):
+    """Movie of a fly's closed loop 1, dark and closed loop 2 sessions, appended in that order, `gap_s` seconds of
+    experiment apart (see :func:`session_movie.append_sessions`).
+
+    Each session has its own colormap and offset histogram, as in the session figures: Greys and a translucent black
+    fill for closed loop 1, Purples for the dark session, Greys and a hatched outline for closed loop 2. While the
+    fly is in the dark the arena is drawn dark and the cue is not drawn; the heatmap still shows the VR angle, which
+    in darkness is the ball's angle, as the dark session figures do, and the ellipsoid body outlines (faint, dotted)
+    where the cue would be at that angle, so the bump's drift from it can be seen.
+
+    Returns:
+        Tuple of (path of the movie, or the list of snapshot paths; the :class:`session_movie.AppendedSessions`).
+    """
+    df = sess_manager.sess_df
+    parts = []
+    for label, closed_loop, style, cue in MOVIE_SESSIONS:
+        rows = df.loc[(df['fly_id'] == fly_id) & (df['closed_loop'] == closed_loop)]
+        if rows.empty:
+            raise ValueError(f'no usable session of {fly_id} with closed_loop == {closed_loop}')
+        parts.append((label, nmp.session.GetTS(sess_manager.load_row(rows.iloc[0])), style, cue))
+    seq = nmp.session_movie.append_sessions(parts, gap_s)
+    movie = nmp.session_movie.ClosedLoopMovie(
+        seq, speed=speed, window=window, vmin=-.5, vmax=2.5, epochs=seq.epochs, accumulate=seq.accumulate,
+        cue_visible=seq.cue_visible, trace_visible=np.ones(len(seq.time), dtype=bool),
+        ghost_cue=~seq.cue_visible, segments=seq.segments,
+        fly_image=MOVIE_ASSETS / 'fly_topdown.png', rig_image=MOVIE_ASSETS / 'vr_rig.png', **kwargs)
+    if outfile is None:
+        outfile = sess_manager.fig_folder / 'movies' / f'{fly_id}_closed_loop_1_dark_closed_loop_2.mp4'
+    return nmp.session_movie.render(movie, outfile, snapshot_times), seq
+
+
+# ----------------------------------------------------------------------------
 # Run everything
 # ----------------------------------------------------------------------------
 def main(basedir=DEFAULT_BASEDIR, figdir=DEFAULT_FIGDIR, condition=CONDITION):

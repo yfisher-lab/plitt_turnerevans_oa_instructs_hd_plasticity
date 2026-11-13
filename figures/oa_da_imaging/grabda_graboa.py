@@ -301,6 +301,62 @@ def plot_session_figures(sess_manager, cmap, twindow=TWINDOW, close=True):
 
 
 # ----------------------------------------------------------------------------
+# Supplemental movie
+# ----------------------------------------------------------------------------
+MOVIE_SPEED = 5.                            # session seconds per movie second
+MOVIE_WINDOW = 180.                         # s of session the heatmap fills before it starts to scroll
+# fly and VR-rig schematics cut from the Figure 1 artwork by figures/movie_assets/make_movie_assets.py
+MOVIE_ASSETS = pathlib.Path(__file__).resolve().parent.parent / 'movie_assets'
+# what each sensor reports, for the movie's titles and legend
+# (the VR angle has its own panel under the heatmap, so the heatmap's angle axis is the ER's alone)
+MOVIE_LABELS = {
+    'DA': nmp.session_movie.MovieLabels(ring_title='ellipsoid body (ER dopamine)', heatmap_title='ER dopamine',
+                                        angle_axis='ER angle (rad)', wedge_activity='ER wedge activity'),
+    'OA': nmp.session_movie.MovieLabels(ring_title='ellipsoid body (ER octopamine)', heatmap_title='ER octopamine',
+                                        angle_axis='ER angle (rad)', wedge_activity='ER wedge activity'),
+}
+MOVIE_HIST_COLORS = {'DA': plt.cm.Blues(.8), 'OA': plt.cm.Greens(.8)}   # offset histogram fill of each sensor
+MOVIE_ER_COLOR = plt.cm.cool(.7)            # the ER neurons' magenta, used throughout, for the ellipsoid body outline
+
+
+def make_session_movie(managers, group, fly_id, session, speed=MOVIE_SPEED, window=MOVIE_WINDOW, outfile=None,
+                       snapshot_times=None, **kwargs):
+    """Explanatory movie of one closed-loop GRAB session (see :mod:`el_hd_plasticity.two_photon.session_movie`).
+
+    Drawn with the sensor's colormap (``GROUPS``) and the color limits of the session heatmaps, and loaded with the
+    same settings, so the movie's heatmap is the session figure's.
+
+    Args:
+        managers: Output of :func:`load_session_managers`.
+        group: 'DA' or 'OA'.
+        fly_id, session: Which session, e.g. ``'02_01_2025_fly2_grab_DA'`` and ``'closed_loop-000'``.
+        speed: Session seconds per movie second.
+        window: Seconds of session the heatmap fills before it starts to scroll.
+        outfile: MP4 path; ``<group fig folder>/movies/<fly_id>_<session>.mp4`` by default.
+        snapshot_times: If given, save PNG frames at these session times (s) next to `outfile` instead of the
+            movie, to check the layout quickly.
+        **kwargs: Passed to :class:`session_movie.ClosedLoopMovie`.
+
+    Returns:
+        Path of the movie, or the list of snapshot paths.
+    """
+    sess_manager = managers[group]
+    df = sess_manager.sess_df
+    rows = df.loc[(df['fly_id'] == fly_id) & (df['session'] == session)]
+    if rows.empty:
+        raise ValueError(f'no usable {group} session {session} of {fly_id}')
+    if rows.iloc[0]['closed_loop'] < 1:
+        raise ValueError(f'{fly_id} {session} is a dark session; the movie needs the visual cue of closed loop')
+    if outfile is None:
+        outfile = sess_manager.fig_folder / 'movies' / f'{fly_id}_{session}.mp4'
+    return nmp.session_movie.movie_from_session(
+        sess_manager, rows.iloc[0], outfile, snapshot_times=snapshot_times, speed=speed, window=window,
+        cmap=GROUPS[group][0], vmin=-.5, vmax=3, labels=MOVIE_LABELS[group], heading_panel=True,
+        hist_color=MOVIE_HIST_COLORS[group], outline_color=MOVIE_ER_COLOR,
+        fly_image=MOVIE_ASSETS / 'fly_topdown.png', rig_image=MOVIE_ASSETS / 'vr_rig.png', **kwargs)
+
+
+# ----------------------------------------------------------------------------
 # Heading-aligned responses across flies
 # ----------------------------------------------------------------------------
 def compute_split_halves(managers):

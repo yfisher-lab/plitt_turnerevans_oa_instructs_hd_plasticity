@@ -245,12 +245,41 @@ def mean_over_bins_tests(grouped, group_col, groups, kind='rho'):
     return tests
 
 
+def complete_bins(reg, dv='log_rho'):
+    """Rows of the speed bins that every fly of `reg` has, so the within-fly factor is balanced.
+
+    :func:`pg.mixed_anova` needs every fly at every level of the within factor; the fastest bins are empty in
+    some sessions (:func:`stats.reformat_binned_stats_for_reg` leaves those rows out), so they are dropped
+    here rather than silently unbalancing the ANOVA.
+    """
+    counts = reg.dropna(subset=dv).groupby('dh')['fly_id'].nunique()
+    return reg.loc[reg['dh'].isin(counts[counts == reg['fly_id'].nunique()].index)].dropna(subset=dv)
+
+
+def qqplots_by_bin(figdir, reg, dv, filename, ncols=5):
+    """One QQ plot of `dv` per speed bin, the diagnostic of the within-fly cells of the mixed ANOVA."""
+    bins = np.sort(reg['dh'].unique())
+    nrows = int(np.ceil(len(bins) / ncols))
+    fig, axs = plt.subplots(nrows, ncols, figsize=[3 * ncols, 3 * nrows], squeeze=False)
+    for ax, dh in zip(axs.flat, bins, strict=False):
+        pg.qqplot(reg.loc[reg['dh'] == dh, dv], ax=ax)
+        ax.set_title(f'dh={dh:.2f}', fontsize=9)
+    for ax in axs.flat[len(bins):]:
+        ax.axis('off')
+    fig.tight_layout()
+    fig.savefig(_pdf(figdir, filename), bbox_inches='tight')
+    plt.close(fig)
+    return fig
+
+
 def rho_regression_tests(figdir, grouped, group_col, bins):
     """Do the groups differ in how the PV magnitude depends on rotation speed (and on closed loop vs dark)?
 
-    Reshapes the binned PV magnitude to one row per fly and bin and runs, on closed-loop data, a mixed ANOVA of
-    log PV magnitude (group between flies, speed bin within flies) with pairwise follow-ups, the same for the raw
-    PV magnitude, and a closed-loop vs dark comparison of the raw PV magnitude across all data. Saves QQ plots.
+    Reshapes the binned PV magnitude to one row per fly and bin and runs a mixed ANOVA of log PV magnitude
+    (group between flies, speed bin within flies) in closed loop and in the dark, as the GRAB sensor analysis
+    does, restricted to the bins every fly has (:func:`complete_bins`). Adds pairwise follow-ups in closed
+    loop, for the log and the raw PV magnitude, and a closed-loop vs dark comparison of the raw PV magnitude
+    across all data. Saves a QQ plot of the pooled log PV magnitude and one per speed bin.
 
     Returns:
         Dict of result tables.
@@ -263,14 +292,19 @@ def rho_regression_tests(figdir, grouped, group_col, bins):
     pg.qqplot(reg['log_rho'], ax=ax)
     fig.savefig(_pdf(figdir, 'log_rho_qqplot.pdf'), bbox_inches='tight')
     plt.close(fig)
+    qqplots_by_bin(figdir, reg, 'log_rho', 'log_rho_qqplots_by_bin.pdf')
 
     def pairwise(dv, within, data):
         return pg.pairwise_tests(dv=dv, between=group_col, subject='fly_id', within=within, data=data,
                                  padjust='holm', parametric=True, interaction=True, within_first=False)
 
+    def anova(data):
+        return pg.mixed_anova(dv='log_rho', between=group_col, within='dh', subject='fly_id',
+                              data=complete_bins(data))
+
     return {
-        'log_rho_mixed_anova_closed_loop': pg.mixed_anova(dv='log_rho', between=group_col, within='dh',
-                                                          subject='fly_id', data=cl),
+        'log_rho_mixed_anova_closed_loop': anova(cl),
+        'log_rho_mixed_anova_dark': anova(reg.loc[reg['dark'] == 1]),
         'log_rho_pairwise_closed_loop': pairwise('log_rho', 'dh', cl),
         'rho_pairwise_closed_loop': pairwise('rho', 'dh', cl),
         'rho_pairwise_dark_vs_closed_loop': pairwise('rho', 'dark', reg),
@@ -294,12 +328,15 @@ def dphi_regression_tests(grouped, group_col, groups, reference, bins, re_formul
     many speed bins are not treated as independent observations. The `reference` group and closed loop are the
     baseline, so ``dh`` is the reference group's closed-loop slope and every other term is a difference from it.
 
-    Two Wald tests are reported (chi-square, one degree of freedom per term), each spanning both conditions:
+    Two Wald tests are reported as F tests, each spanning both conditions:
     one of every between-group slope term (``dh:group`` and ``dh:group:dark``) and one of every between-group
     intercept term (``group`` and ``group:dark``). The conditions are not tested separately, so a group
     difference in either of them, or a difference in how darkness changes a group, counts towards the same
-    test. The effects of darkness itself stay in the model as the ``dark`` terms of the summary. The
-    individual slope terms are also reported, Holm-corrected together.
+    test. ``df_num`` is the number of terms constrained and ``df_denom`` the model's residual degrees of
+    freedom, which statsmodels counts as one per row (bin x condition x fly), not per fly; it is the naive
+    denominator rather than a Satterthwaite approximation, so the F tests are, if anything, liberal. The
+    effects of darkness itself stay in the model as the ``dark`` terms of the summary. The individual slope
+    terms are also reported, Holm-corrected together.
 
     Args:
         reference: Value of the group column used as the baseline of the model.
@@ -328,8 +365,9 @@ def dphi_regression_tests(grouped, group_col, groups, reference, bins, re_formul
     wald = []
     for family, templates in DPHI_TERM_FAMILIES:
         tested = model_terms(templates)
-        test = result.wald_test(', '.join(f'({name} = 0)' for name in tested), scalar=True)
-        wald.append({'terms': family, 'chi2': float(test.statistic), 'df': len(tested), 'p': float(test.pvalue)})
+        test = result.wald_test(', '.join(f'({name} = 0)' for name in tested), scalar=True, use_f=True)
+        wald.append({'terms': family, 'F': float(test.statistic), 'df_num': int(test.df_num),
+                     'df_denom': int(test.df_denom), 'p': float(test.pvalue)})
 
     slopes = pd.DataFrame({'term': model_terms(DPHI_SLOPE_TERMS)})
     slopes['coef'] = [result.params[name] for name in slopes['term']]

@@ -2,7 +2,9 @@
 
 Shared building blocks: ``session``, ``stats``, ``bump_shape``, ``plotting``, ``loading`` and
 ``utilities``. Experiment modules: ``epg_across_dark``, ``tbh_rnai``, ``oa_receptor_ko``,
-``grab_sensors``, ``group_comparison``, ``dual_imaging``, ``remapping``, ``epg_silencing``, ``ex_vivo`` and ``shibirets``.
+``grab_sensors``, ``group_comparison``, ``dual_imaging``, ``remapping``, ``epg_silencing``, ``ex_vivo`` and ``shibirets``;
+``session_movie`` renders explanatory movies of single sessions and ``remapping_movie`` an animated
+schematic of the remapping protocol.
 """
 
 from . import (
@@ -17,7 +19,9 @@ from . import (
     oa_receptor_ko,
     plotting,
     remapping,
+    remapping_movie,
     session,
+    session_movie,
     shibirets,
     stats,
     tbh_rnai,
@@ -36,7 +40,9 @@ __all__ = [
     "oa_receptor_ko",
     "plotting",
     "remapping",
+    "remapping_movie",
     "session",
+    "session_movie",
     "shibirets",
     "stats",
     "tbh_rnai",

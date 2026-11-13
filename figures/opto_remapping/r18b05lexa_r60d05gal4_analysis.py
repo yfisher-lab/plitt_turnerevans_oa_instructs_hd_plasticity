@@ -86,6 +86,43 @@ def plot_session_figures(sess_manager):
     return nmp.remapping.plot_session_figures(sess_manager.fig_folder, sess_manager, SESSION_GROUPS)
 
 
+def plot_pairing_scans(sess_manager, close=True):
+    """Heatmap of the remap_0deg and remap_180deg (pairing) scans of every fly, with the VR angle and the stimulated
+    wedge of each pairing (:func:`el_hd_plasticity.two_photon.remapping.plot_pairing_scans`).
+
+    The table of how many of the programmed pairings each scan recorded is saved as ``<fig_folder>/stats/pairing_scans.csv``.
+
+    Returns:
+        DataFrame with one row per pairing scan.
+    """
+    summary = nmp.remapping.plot_pairing_scans(sess_manager.fig_folder, sess_manager, SESSION_GROUPS, close=close)
+    nmp.utilities.save_tables({'pairing_scans': summary}, sess_manager.fig_folder)
+    return summary
+
+
+# fly and VR-rig schematics cut from the Figure 1 artwork by figures/movie_assets/make_movie_assets.py
+MOVIE_ASSETS = pathlib.Path(__file__).resolve().parent.parent / 'movie_assets'
+REMAP_MOVIE_FLY = '18_07_2024_fly1_condition_remap'
+REMAP_MOVIE_GAP = 15.                       # s of experiment between consecutive sessions in the movie
+REMAP_MOVIE_SPEED = 5.                      # experiment seconds per movie second
+SESSION_VMAX = 3.                           # color limit of the session heatmaps (remapping.plot_session_figures)
+
+
+def make_remapping_session_movie(sess_manager, fly_id=REMAP_MOVIE_FLY, gap_s=REMAP_MOVIE_GAP, speed=REMAP_MOVIE_SPEED,
+                                 outfile=None, snapshot_times=None, **kwargs):
+    """Movie of all of a fly's imaging sessions, appended in the order acquired, `gap_s` seconds of experiment apart,
+    with every EL stimulation drawn at its wedge (see :func:`remapping_movie.remap_sequence_movie`).
+
+    Returns:
+        Tuple of (path of the movie, or the list of snapshot paths; the :class:`remapping_movie.SessionSequence`).
+    """
+    if outfile is None:
+        outfile = sess_manager.fig_folder / 'movies' / f'{fly_id}_all_sessions.mp4'
+    return nmp.remapping_movie.remap_sequence_movie(
+        sess_manager, fly_id, outfile, vmax=SESSION_VMAX, gap_s=gap_s, speed=speed, snapshot_times=snapshot_times,
+        fly_image=MOVIE_ASSETS / 'fly_topdown.png', rig_image=MOVIE_ASSETS / 'vr_rig.png', **kwargs)
+
+
 def main(basedir=BASEDIR, figdir=DEFAULT_FIGDIR, session_figures=True):
     """Generate all figures and write the statistics tables to ``<figdir>/stats``."""
     plt.rcParams['pdf.fonttype'] = 42

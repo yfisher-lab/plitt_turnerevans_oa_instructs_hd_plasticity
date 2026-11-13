@@ -52,12 +52,14 @@ def offset_analysis(sess_manager):
 
 
 def rho_analysis(sess_manager):
-    """PV magnitude vs rotation speed: curves and tests of the mean over speed."""
+    """PV magnitude vs rotation speed: curves, tests of the mean over speed, and the mixed ANOVA of the
+    GRAB sensor analysis (group between flies, speed bin within flies, closed loop and dark separately)."""
     figdir = sess_manager.fig_folder
     grouped = nmp.group_comparison.compute_binned_stats(sess_manager, GROUP_COL, 'rho', RHO_BINS, exclude_first_cl=False)
     nmp.group_comparison.plot_binned_vs_speed(figdir, grouped, GROUP_COL, GROUPS, 'rho', RHO_BINS,
                                               'PVMag_v_RotVel.pdf', 'PV magnitude')
     tables = {'rho_mean_over_speed_tests': nmp.group_comparison.mean_over_bins_tests(grouped, GROUP_COL, GROUPS)}
+    tables.update(nmp.group_comparison.rho_regression_tests(figdir, grouped, GROUP_COL, RHO_BINS))
     return grouped, tables
 
 

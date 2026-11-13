@@ -10,6 +10,7 @@ import argparse
 import pathlib
 
 import matplotlib
+import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 
@@ -82,6 +83,85 @@ def offset_analysis(sess_manager):
 def plot_session_figures(sess_manager):
     """Heatmaps with offset histograms and polar plots of the baseline and two post-cue scans of every fly."""
     return nmp.remapping.plot_session_figures(sess_manager.fig_folder, sess_manager, GROUPS, vmax=SESSION_VMAX)
+
+
+def plot_pairing_scans(sess_manager, close=True):
+    """Heatmap of the remap_0deg and remap_180deg (pairing) scans of every fly, with the VR angle and the stimulated
+    wedge of each pairing (:func:`el_hd_plasticity.two_photon.remapping.plot_pairing_scans`).
+
+    The table of how many of the programmed pairings each scan recorded is saved as ``<fig_folder>/stats/pairing_scans.csv``.
+
+    Returns:
+        DataFrame with one row per pairing scan.
+    """
+    summary = nmp.remapping.plot_pairing_scans(sess_manager.fig_folder, sess_manager, GROUPS, vmax=SESSION_VMAX, close=close)
+    nmp.utilities.save_tables({'pairing_scans': summary}, sess_manager.fig_folder)
+    return summary
+
+
+# fly and VR-rig schematics cut from the Figure 1 artwork by figures/movie_assets/make_movie_assets.py
+MOVIE_ASSETS = pathlib.Path(__file__).resolve().parent.parent / 'movie_assets'
+PAIRING_SCANS = {0.: 'remap_0deg', np.pi: 'remap_180deg'}     # opto-paired offset -> scan type of its pairing scan
+
+
+def make_remapping_schematic_movie(sess_manager, paired_offset=np.pi, outfile=None, snapshot_times=None, **kwargs):
+    """Animated schematic of the remapping protocol (see :mod:`el_hd_plasticity.two_photon.remapping_movie`).
+
+    The activity is simulated; the pairing schedule (angles, cycles, durations, step of the cue) is read from this
+    experiment's first pairing scan with the given opto-paired offset, so the movie runs the protocol as recorded.
+
+    Args:
+        paired_offset: The opto-paired offset to show: pi (the 180 degree pairing, as in the figure panel) or 0.
+        outfile: MP4 path; ``<fig_folder>/movies/remapping_schematic_<scan>.mp4`` by default.
+        snapshot_times: If given, save PNG frames at these experiment times (s) next to `outfile` instead of the
+            movie, to check the layout quickly.
+        **kwargs: Passed to :class:`remapping_movie.RemappingSchematicMovie` (and on to the simulation).
+
+    Returns:
+        Path of the movie, or the list of snapshot paths.
+    """
+    scan = PAIRING_SCANS[min(PAIRING_SCANS, key=lambda offset: abs(np.angle(np.exp(1j * (offset - paired_offset)))))]
+    row = sess_manager.sess_df.loc[sess_manager.sess_df['scan_type'] == scan].iloc[0]
+    protocol = nmp.remapping_movie.PairingProtocol.from_session(sess_manager.load_row(row), paired_offset)
+    movie = nmp.remapping_movie.RemappingSchematicMovie(protocol, fly_image=MOVIE_ASSETS / 'fly_topdown.png',
+                                                        rig_image=MOVIE_ASSETS / 'vr_rig.png', **kwargs)
+    if outfile is None:
+        outfile = sess_manager.fig_folder / 'movies' / f'remapping_schematic_{scan}.mp4'
+    outfile = pathlib.Path(outfile)
+    outfile.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if snapshot_times is not None:
+            paths = [outfile.with_name(f'{outfile.stem}_t{t:05.1f}.png') for t in snapshot_times]
+            for t, path in zip(snapshot_times, paths, strict=True):
+                movie.snapshot(movie.frame_at(t), path)
+            return paths, protocol
+        return movie.save(outfile), protocol
+    finally:
+        plt.close(movie.fig)
+
+
+REMAP_MOVIE_FLY = '27_11_2024_fly2_condition_uas_control'     # the control example of the remapping figure
+REMAP_MOVIE_GAP = 15.                       # s of experiment between consecutive sessions in the movie
+REMAP_MOVIE_SPEED = 5.                      # experiment seconds per movie second
+
+
+def make_remapping_session_movie(sess_manager, fly_id=REMAP_MOVIE_FLY, gap_s=REMAP_MOVIE_GAP, speed=REMAP_MOVIE_SPEED,
+                                 outfile=None, snapshot_times=None, **kwargs):
+    """Movie of all of a fly's imaging sessions, appended in the order acquired (baseline, the pairing scans and the
+    post-pairing scans), `gap_s` seconds of experiment apart (see :func:`remapping_movie.remap_sequence_movie`).
+
+    The heatmap and ellipsoid body change colormap at the first stimulation of each pairing scan; each colormap's
+    offset histogram is that of the following closed-loop scan. Every stimulation is drawn as a laser cone at the
+    stimulated wedge; the arena goes dark while the screen is off.
+
+    Returns:
+        Tuple of (path of the movie, or the list of snapshot paths; the :class:`remapping_movie.SessionSequence`).
+    """
+    if outfile is None:
+        outfile = sess_manager.fig_folder / 'movies' / f'{fly_id}_all_sessions.mp4'
+    return nmp.remapping_movie.remap_sequence_movie(
+        sess_manager, fly_id, outfile, vmax=SESSION_VMAX, gap_s=gap_s, speed=speed, snapshot_times=snapshot_times,
+        fly_image=MOVIE_ASSETS / 'fly_topdown.png', rig_image=MOVIE_ASSETS / 'vr_rig.png', **kwargs)
 
 
 def main(basedir=BASEDIR, figdir=DEFAULT_FIGDIR, session_figures=True):
